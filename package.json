@@ -1,0 +1,33 @@
+{
+  "name": "troubleshooting-poc",
+  "module": "index.ts",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "extract": "bun src/extract.ts",
+    "chat": "bun src/main.ts",
+    "test": "bun tests/evaluate.ts",
+    "build": "tsc",
+    "dev": "bun --watch src/main.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/node": "^25.2.3",
+    "@types/node-fetch": "^2.6.13",
+    "@types/pdf-parse": "^1.1.5",
+    "tsx": "^4.21.0"
+  },
+  "peerDependencies": {
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "@ai-sdk/google": "^3.0.29",
+    "@ai-sdk/groq": "^3.0.24",
+    "ai": "^6.0.86",
+    "dotenv": "^17.3.1",
+    "node-fetch": "^3.3.2",
+    "pdf-lib": "^1.17.1",
+    "pdfjs-dist": "^5.4.624",
+    "zod": "^4.3.6"
+  }
+}
