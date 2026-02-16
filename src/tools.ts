@@ -2,16 +2,17 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import { ProcessRegistry } from './registry.js';
 
+
 /**
- * Create tools for the LLM to interact with the process registry
- */
+* Create tools for the LLM to interact with the process registry
+*/
 export function createTools(registry: ProcessRegistry) {
     return {
         /**
          * List all available troubleshooting processes
          */
         listAvailableProcesses: tool({
-            description: 'Get a list of all available troubleshooting processes with their descriptions',
+            description: 'Get a list of all available troubleshooting processes with their descriptions and tags',
             parameters: z.object({}),
             execute: async () => {
                 const processes = registry.listProcesses();
@@ -22,48 +23,49 @@ export function createTools(registry: ProcessRegistry) {
             },
         }),
 
+
         /**
- * Get complete details of a specific process
- */
+         * Get complete details of a specific process
+         */
         getProcessDetails: tool({
-            description: 'Retrieve the complete troubleshooting steps and details for a specific process',
+            description: 'Retrieve the complete troubleshooting nodes and details for a specific process. You can use either the processId (e.g. "smtp-connection-issue") or processName (e.g. "SMTP Connection Issue"). Always use the processId from searchProcesses results when available.',
             parameters: z.object({
-                processName: z.string().describe('The exact name of the process to retrieve'),
+                processId: z.string().describe('The processId or processName of the process to retrieve. Prefer using the processId returned by searchProcesses.'),
             }),
-            execute: async ({ processName }) => {
-                const process = registry.getProcess(processName);
+            execute: async ({ processId }) => {
+                const proc = registry.getProcess(processId);
 
-                console.log('🔍 DEBUG: Looking for:', processName);
-                console.log('📦 DEBUG: Process found?', !!process);
-                console.log('📦 DEBUG: Process data:', JSON.stringify(process, null, 2));
 
-                if (!process) {
+                if (!proc) {
                     return {
-                        error: `Process '${processName}' not found`,
-                        availableProcesses: registry.listProcesses().map(p => p.name),
+                        error: `Process '${processId}' not found. Try using the exact processId from searchProcesses results.`,
+                        availableProcesses: registry.listProcesses().map(p => ({ processId: p.processId, name: p.name })),
                     };
                 }
 
-                // Return the process clearly
+
+                // Return the full node-based process
                 return {
                     success: true,
-                    processName: process.processName,
-                    description: process.description,
-                    prerequisites: process.prerequisites,
-                    steps: process.steps,
-                    decisionPoints: process.decisionPoints,
-                    expectedResolution: process.expectedResolution,
+                    processId: proc.processId,
+                    processName: proc.processName,
+                    description: proc.description,
+                    tags: proc.tags,
+                    version: proc.version,
+                    entryCriteria: proc.entryCriteria,
+                    nodes: proc.nodes,
                 };
             },
         }),
+
 
         /**
          * Search for processes by keywords
          */
         searchProcesses: tool({
-            description: 'Find troubleshooting processes that match the given keywords',
+            description: 'Find troubleshooting processes that match the given keywords. Searches process names, descriptions, tags, and entry criteria.',
             parameters: z.object({
-                keywords: z.string().describe('Keywords to search for in process names and descriptions'),
+                keywords: z.string().describe('Keywords to search for in process names, descriptions, and tags'),
             }),
             execute: async ({ keywords }) => {
                 const results = registry.searchProcesses(keywords);
@@ -74,18 +76,17 @@ export function createTools(registry: ProcessRegistry) {
             },
         }),
 
+
         /**
          * Ask user for clarification
          */
         askClarification: tool({
-            description: 'When the user query is ambiguous, ask them to clarify by choosing from predefined options',
+            description: 'When the user query is ambiguous, ask them to clarify by choosing from predefined options. Never present more than 2 options.',
             parameters: z.object({
                 question: z.string().describe('The clarification question to ask the user'),
-                options: z.array(z.string()).describe('Array of options for the user to choose from'),
+                options: z.array(z.string()).describe('Array of options for the user to choose from (max 2)'),
             }),
             execute: async ({ question, options }) => {
-                // This will be handled by the chat interface
-                // Return the question and options for the chat loop to present
                 return {
                     needsClarification: true,
                     question,
@@ -96,4 +97,6 @@ export function createTools(registry: ProcessRegistry) {
     };
 }
 
+
 export type Tools = ReturnType<typeof createTools>;
+
