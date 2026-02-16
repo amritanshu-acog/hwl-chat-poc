@@ -1,26 +1,24 @@
-import { generateText, streamText, stepCountIs } from 'ai';
-import { google } from '@ai-sdk/google';
-import { type Tools } from './tools.js';
-
+import { generateText, streamText, stepCountIs } from "ai";
+import { google } from "@ai-sdk/google";
+import { type Tools } from "./tools.js";
 
 // Check if API key is loaded
 const apiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
 if (!apiKey) {
-    console.error('❌ ERROR: GOOGLE_GENERATIVE_AI_API_KEY not found in environment variables!');
-    console.error('Make sure your .env file exists and contains the API key.');
-    process.exit(1);
+  console.error(
+    "❌ ERROR: GOOGLE_GENERATIVE_AI_API_KEY not found in environment variables!",
+  );
+  console.error("Make sure your .env file exists and contains the API key.");
+  process.exit(1);
 }
 
+console.log("✅ API Key loaded:", apiKey.substring(0, 10) + "...");
 
-console.log('✅ API Key loaded:', apiKey.substring(0, 10) + '...');
-
-
-const model = google('gemini-2.5-flash');
-
+const model = google("gemini-2.5-flash");
 
 /**
-* System prompt for document extraction — produces node-based process JSON
-*/
+ * System prompt for document extraction — produces node-based process JSON
+ */
 const EXTRACTION_SYSTEM_PROMPT = `You are a technical documentation parser. Extract troubleshooting processes from the provided text.
 
 
@@ -84,10 +82,9 @@ RULES:
 
 Format: [{ "processId": "...", ... }, ...]`;
 
-
 /**
-* System prompt for chat-based troubleshooting — incremental step execution
-*/
+ * System prompt for chat-based troubleshooting — incremental step execution
+ */
 const CHAT_SYSTEM_PROMPT = `You are a Troubleshooting Orchestrator AI.
 
 
@@ -153,199 +150,197 @@ Available tools:
 - listAvailableProcesses: Show all available processes.
 - askClarification: Present options when ambiguous (max 2 options).`;
 
-
-
-
 /**
-* Extract troubleshooting processes from document text using LLM
-*/
+ * Extract troubleshooting processes from document text using LLM
+ */
 /**
-* Attempt to repair truncated or malformed JSON from LLM output
-*/
+ * Attempt to repair truncated or malformed JSON from LLM output
+ */
 function repairJson(jsonStr: string): string {
-    // Remove trailing commas before } or ]
-    jsonStr = jsonStr.replace(/,(\s*[}\]])/g, '$1');
+  // Remove trailing commas before } or ]
+  jsonStr = jsonStr.replace(/,(\s*[}\]])/g, "$1");
 
+  // Fix truncated strings — close any open quote
+  const quoteCount = (jsonStr.match(/(?<!\\)"/g) || []).length;
+  if (quoteCount % 2 !== 0) {
+    jsonStr += '"';
+  }
 
-    // Fix truncated strings — close any open quote
-    const quoteCount = (jsonStr.match(/(?<!\\)"/g) || []).length;
-    if (quoteCount % 2 !== 0) {
-        jsonStr += '"';
+  // Count open/close brackets and braces
+  let openBraces = 0,
+    openBrackets = 0;
+  let inString = false;
+  let prevChar = "";
+
+  for (const ch of jsonStr) {
+    if (ch === '"' && prevChar !== "\\") {
+      inString = !inString;
     }
-
-
-    // Count open/close brackets and braces
-    let openBraces = 0, openBrackets = 0;
-    let inString = false;
-    let prevChar = '';
-
-
-    for (const ch of jsonStr) {
-        if (ch === '"' && prevChar !== '\\') {
-            inString = !inString;
-        }
-        if (!inString) {
-            if (ch === '{') openBraces++;
-            else if (ch === '}') openBraces--;
-            else if (ch === '[') openBrackets++;
-            else if (ch === ']') openBrackets--;
-        }
-        prevChar = ch;
+    if (!inString) {
+      if (ch === "{") openBraces++;
+      else if (ch === "}") openBraces--;
+      else if (ch === "[") openBrackets++;
+      else if (ch === "]") openBrackets--;
     }
+    prevChar = ch;
+  }
 
+  // Close any unclosed braces/brackets
+  while (openBraces > 0) {
+    jsonStr += "}";
+    openBraces--;
+  }
+  while (openBrackets > 0) {
+    jsonStr += "]";
+    openBrackets--;
+  }
 
-    // Close any unclosed braces/brackets
-    while (openBraces > 0) { jsonStr += '}'; openBraces--; }
-    while (openBrackets > 0) { jsonStr += ']'; openBrackets--; }
+  // Final trailing comma cleanup (may have been introduced)
+  jsonStr = jsonStr.replace(/,(\s*[}\]])/g, "$1");
 
-
-    // Final trailing comma cleanup (may have been introduced)
-    jsonStr = jsonStr.replace(/,(\s*[}\]])/g, '$1');
-
-
-    return jsonStr;
+  return jsonStr;
 }
 
+export async function extractProcessesFromDocument(
+  text: string,
+): Promise<any[]> {
+  console.log("Sending document to LLM for extraction...\n");
 
-export async function extractProcessesFromDocument(text: string): Promise<any[]> {
-    console.log('Sending document to LLM for extraction...\n');
+  // Truncate if too long (Gemini has token limits)
+  const maxChars = 100000; // ~25k tokens
+  if (text.length > maxChars) {
+    console.log(
+      `⚠️  Document too large (${text.length} chars). Truncating to ${maxChars} chars.`,
+    );
+    text = text.substring(0, maxChars);
+  }
 
+  try {
+    const { text: response } = await generateText({
+      model,
+      system: EXTRACTION_SYSTEM_PROMPT,
+      prompt: `Extract all troubleshooting processes from this document. Return ONLY a JSON array with no additional text:\n\n${text}`,
+      temperature: 0.1,
+      maxTokens: 16000,
+    });
 
-    // Truncate if too long (Gemini has token limits)
-    const maxChars = 100000; // ~25k tokens
-    if (text.length > maxChars) {
-        console.log(`⚠️  Document too large (${text.length} chars). Truncating to ${maxChars} chars.`);
-        text = text.substring(0, maxChars);
+    console.log("Received response from LLM\n");
+
+    // Log raw response for debugging
+    console.log("📝 Raw response length:", response.length, "chars");
+    console.log(
+      "📝 Response tail (last 200 chars):",
+      response.substring(response.length - 200),
+    );
+    console.log("");
+
+    // Try to find JSON array in response
+    let jsonStr: string | null = null;
+
+    // Method 1: Extract from markdown code blocks
+    const codeBlockMatch = response.match(
+      /```(?:json)?\s*(\[[\s\S]*?\])\s*```/,
+    );
+    if (codeBlockMatch) {
+      jsonStr = codeBlockMatch[1];
     }
 
+    // Method 2: Find the outermost [ ... ] (greedy)
+    if (!jsonStr) {
+      const arrayMatch = response.match(/\[[\s\S]*\]/);
+      if (arrayMatch) {
+        jsonStr = arrayMatch[0];
+      }
+    }
+
+    // Method 3: If response starts with [ but doesn't end with ] (truncated)
+    if (!jsonStr) {
+      const startIdx = response.indexOf("[");
+      if (startIdx !== -1) {
+        console.log("⚠️  JSON appears truncated, attempting repair...");
+        jsonStr = response.substring(startIdx);
+      }
+    }
+
+    if (!jsonStr) {
+      console.error("No JSON array found in response");
+      console.log(
+        "Raw response (first 500 chars):",
+        response.substring(0, 500),
+      );
+      return [];
+    }
+
+    // Clean up whitespace
+    jsonStr = jsonStr.replace(/\n/g, " ").replace(/\s+/g, " ");
+
+    // Try parsing directly first
+    try {
+      const processes = JSON.parse(jsonStr);
+      return Array.isArray(processes) ? processes : [processes];
+    } catch (_firstError) {
+      console.log("⚠️  Initial JSON parse failed, attempting repair...");
+    }
+
+    // Repair and retry
+    jsonStr = repairJson(jsonStr);
 
     try {
-        const { text: response } = await generateText({
-            model,
-            system: EXTRACTION_SYSTEM_PROMPT,
-            prompt: `Extract all troubleshooting processes from this document. Return ONLY a JSON array with no additional text:\n\n${text}`,
-            temperature: 0.1,
-            maxTokens: 16000,
-        });
-
-
-        console.log('Received response from LLM\n');
-
-
-        // Log raw response for debugging
-        console.log('📝 Raw response length:', response.length, 'chars');
-        console.log('📝 Response tail (last 200 chars):', response.substring(response.length - 200));
-        console.log('');
-
-
-        // Try to find JSON array in response
-        let jsonStr: string | null = null;
-
-
-        // Method 1: Extract from markdown code blocks
-        const codeBlockMatch = response.match(/```(?:json)?\s*(\[[\s\S]*?\])\s*```/);
-        if (codeBlockMatch) {
-            jsonStr = codeBlockMatch[1];
-        }
-
-
-        // Method 2: Find the outermost [ ... ] (greedy)
-        if (!jsonStr) {
-            const arrayMatch = response.match(/\[[\s\S]*\]/);
-            if (arrayMatch) {
-                jsonStr = arrayMatch[0];
-            }
-        }
-
-
-        // Method 3: If response starts with [ but doesn't end with ] (truncated)
-        if (!jsonStr) {
-            const startIdx = response.indexOf('[');
-            if (startIdx !== -1) {
-                console.log('⚠️  JSON appears truncated, attempting repair...');
-                jsonStr = response.substring(startIdx);
-            }
-        }
-
-
-        if (!jsonStr) {
-            console.error('No JSON array found in response');
-            console.log('Raw response (first 500 chars):', response.substring(0, 500));
-            return [];
-        }
-
-
-        // Clean up whitespace
-        jsonStr = jsonStr
-            .replace(/\n/g, ' ')
-            .replace(/\s+/g, ' ');
-
-
-        // Try parsing directly first
-        try {
-            const processes = JSON.parse(jsonStr);
-            return Array.isArray(processes) ? processes : [processes];
-        } catch (_firstError) {
-            console.log('⚠️  Initial JSON parse failed, attempting repair...');
-        }
-
-
-        // Repair and retry
-        jsonStr = repairJson(jsonStr);
-
-
-        try {
-            const processes = JSON.parse(jsonStr);
-            console.log('✅ JSON repair successful');
-            return Array.isArray(processes) ? processes : [processes];
-        } catch (repairError) {
-            console.error('❌ JSON repair also failed');
-            console.log('Repaired JSON (first 500 chars):', jsonStr.substring(0, 500));
-            console.log('Repaired JSON (last 200 chars):', jsonStr.substring(jsonStr.length - 200));
-            throw repairError;
-        }
-    } catch (error) {
-        console.error('Error extracting processes:', error);
-        console.log('\n💡 Tip: Try splitting your PDF into smaller sections (10-20 pages each)');
-        throw error;
+      const processes = JSON.parse(jsonStr);
+      console.log("✅ JSON repair successful");
+      return Array.isArray(processes) ? processes : [processes];
+    } catch (repairError) {
+      console.error("❌ JSON repair also failed");
+      console.log(
+        "Repaired JSON (first 500 chars):",
+        jsonStr.substring(0, 500),
+      );
+      console.log(
+        "Repaired JSON (last 200 chars):",
+        jsonStr.substring(jsonStr.length - 200),
+      );
+      throw repairError;
     }
+  } catch (error) {
+    console.error("Error extracting processes:", error);
+    console.log(
+      "\n💡 Tip: Try splitting your PDF into smaller sections (10-20 pages each)",
+    );
+    throw error;
+  }
 }
-
 
 /**
-* Answer a troubleshooting question using the LLM with tools
-*/
+ * Answer a troubleshooting question using the LLM with tools
+ */
 export async function answerTroubleshootingQuestion(
-    question: string,
-    tools: Tools,
-    conversationHistory: Array<{ role: 'user' | 'assistant'; content: string }> = []
+  question: string,
+  tools: Tools,
+  conversationHistory: Array<{
+    role: "user" | "assistant";
+    content: string;
+  }> = [],
 ) {
-    try {
-        console.log('🔍 Calling Gemini API...');
-        console.log('Question:', question);
+  try {
+    console.log("🔍 Calling Gemini API...");
+    console.log("Question:", question);
 
+    const result = await streamText({
+      model,
+      system: CHAT_SYSTEM_PROMPT,
+      messages: [...conversationHistory, { role: "user", content: question }],
+      tools,
+      temperature: 0.2,
+      stopWhen: stepCountIs(5),
+    });
 
-        const result = await streamText({
-            model,
-            system: CHAT_SYSTEM_PROMPT,
-            messages: [
-                ...conversationHistory,
-                { role: 'user', content: question },
-            ],
-            tools,
-            temperature: 0.2,
-            stopWhen: stepCountIs(5),
-        });
-
-
-        return result;
-    } catch (error) {
-        console.error('❌ Error calling Gemini API:', error);
-        if (error instanceof Error) {
-            console.error('Error message:', error.message);
-            console.error('Error stack:', error.stack);
-        }
-        throw error;
+    return result;
+  } catch (error) {
+    console.error("❌ Error calling Gemini API:", error);
+    if (error instanceof Error) {
+      console.error("Error message:", error.message);
+      console.error("Error stack:", error.stack);
     }
+    throw error;
+  }
 }
-

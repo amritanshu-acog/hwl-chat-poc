@@ -5,10 +5,10 @@ An LLM-powered troubleshooting assistant that extracts process documentation and
 ## Features
 
 - 📄 Extract troubleshooting processes from PDFs or web pages
-- 🤖 LLM-powered process extraction using Google Gemini
-- 💾 Structured JSON storage with Zod validation
+- 🤖 LLM-powered process extraction using Google Gemini and Vercel AI SDK
+- 💾 Structured JSON storage with Zod validation (Node-based Graph Schema)
 - 💬 Interactive chat interface for troubleshooting questions
-- 🛠️ Tool-based architecture prevents hallucination
+- 🛠️ Tool-based architecture prevents hallucination by strictly following the process graph
 - ✅ Strict adherence to documented processes
 
 ## Prerequisites
@@ -19,20 +19,20 @@ An LLM-powered troubleshooting assistant that extracts process documentation and
 ## Setup
 
 1. **Install dependencies**:
-```bash
+   ```bash
    bun install
-```
+   ```
 
 2. **Configure environment**:
-```bash
+   ```bash
    cp .env.example .env
    # Edit .env and add your GOOGLE_GENERATIVE_AI_API_KEY
-```
+   ```
 
 3. **Create data directories**:
-```bash
+   ```bash
    mkdir -p data/processes
-```
+   ```
 
 ## Usage
 
@@ -49,9 +49,9 @@ bun run extract https://example.com/troubleshooting-guide
 ```
 
 This will:
-- Parse the document
-- Use LLM to identify troubleshooting processes
-- Save each process as a JSON file in `data/processes/`
+- Parse the document (PDF text or HTML content)
+- Use LLM to identify troubleshooting processes and convert them into a structured node-based graph
+- Save each process as a JSON file in `data/processes/` with a unique ID
 
 ### Interactive Chat Mode
 
@@ -64,14 +64,18 @@ This will:
 - Load all processes from `data/processes/`
 - Start an interactive prompt
 - Answer questions based strictly on loaded processes
+- Guide the user step-by-step through the troubleshooting graph
 - Handle clarifications when needed
 
 Example interaction:
 ```
 You: How do I fix a paper jam?
-Assistant: I'll help you with the paper jam issue. Here are the steps...
+Assistant: I've found a process for "Printer Paper Jam Resolution". 
+           First, is the printer displaying an error code?
 
-You: exit
+You: Yes
+Assistant: Is the error code 'E-50'?
+...
 ```
 
 ### Run Tests
@@ -85,33 +89,45 @@ bun run test
 
 ### Components
 
-1. **schemas.ts**: Zod schemas for type-safe process definitions
-2. **registry.ts**: In-memory storage for loaded processes
-3. **tools.ts**: LLM tools for process discovery and retrieval
-4. **llm-client.ts**: Gemini integration with system prompts
-5. **extract.ts**: Document parsing and process extraction
-6. **main.ts**: Interactive chat orchestration
+1. **schemas.ts**: Zod schemas for the node-based process graph structure.
+2. **registry.ts**: In-memory storage and retrieval logic for loaded processes.
+3. **tools.ts**: Vercel AI SDK tools definitions (`searchProcesses`, `getProcessDetails`, etc.).
+4. **llm-client.ts**: Gemini integration using Vercel AI SDK (`generateText`, `streamText`) and system prompts.
+5. **extract.ts**: Document parsing (PDF/URL) and extraction orchestration.
+6. **main.ts**: CLI entry point and interactive chat loop.
 
-### Process Schema
+### Process Schema (Node-Based Graph)
+
+The system uses a flexible graph structure where processes are composed of interconnected nodes.
+
 ```typescript
+// Core Process Structure
 {
-  processName: string          // Unique identifier
-  description: string          // What this troubleshoots
-  prerequisites: string[]      // Requirements before starting
-  steps: [{
-    stepNumber: number
-    instruction: string
-    condition: string | null
-    possibleOutcomes: string[]
-  }]
-  decisionPoints: [{
-    question: string
-    options: [{
-      answer: string
-      nextStep: number
-    }]
-  }]
-  expectedResolution: string   // Success criteria
+  processId: string;          // Unique identifier (e.g. "printer-jam-fix")
+  processName: string;        // Human readable name
+  description: string;        // What this troubleshoots
+  tags: string[];            
+  version: string;
+  entryCriteria: {
+    keywords: string[];       // Keywords that trigger this process
+    requiredContext: string[];
+  };
+  nodes: ProcessNode[];       // Array of all nodes in the graph
+}
+
+// Node Structure
+{
+  nodeId: string;             // Unique within process (e.g. "CHECK_POWER")
+  type: "question" | "action" | "decision" | "info" | "resolution";
+  instruction?: string;       // For actions/info
+  question?: string;          // For questions/decisions
+  validationHint?: string;    // How to verify answer
+  next?: {                    // Branching logic
+    "yes": "NODE_ID_1",
+    "no": "NODE_ID_2",
+    "default": "NODE_ID_3"
+  };
+  message?: string;           // For resolution nodes
 }
 ```
 
@@ -119,10 +135,10 @@ bun run test
 
 The system provides these tools to prevent hallucination:
 
-- `listAvailableProcesses`: Discover what processes exist
-- `getProcessDetails`: Retrieve full process JSON
-- `searchProcesses`: Find processes by keywords
-- `askClarification`: Handle ambiguous queries
+- `searchProcesses`: Find processes by keywords (searches name, description, tags, entry criteria).
+- `getProcessDetails`: Retrieve the full process graph using a specific `processId`.
+- `listAvailableProcesses`: List all loaded processes.
+- `askClarification`: Ask the user to clarify if the request is ambiguous.
 
 ## Key Design Decisions
 
@@ -139,52 +155,71 @@ Using Vercel AI SDK tools ensures:
 - Structured access to processes
 - Traceable information flow
 - Clear separation between retrieval and generation
+- The LLM acts as an orchestrator, "reading" the graph node-by-node.
 
 ### Schema Validation
 
 Zod schemas provide:
 - Type safety at runtime
-- Clear process structure
-- Validation during extraction
+- Validation during extraction (ensuring the LLM outputs valid graphs)
+- Guaranteed structure for the chat engine
 
 ## Example Process JSON
+
 ```json
 {
-  "processName": "printer-paper-jam",
-  "description": "Steps to resolve paper jam errors",
-  "prerequisites": [
-    "Printer is powered on",
-    "Access to printer internals"
-  ],
-  "steps": [
+  "processId": "printer-paper-jam",
+  "processName": "Printer Paper Jam Resolution",
+  "description": "Steps to resolve paper jam errors in office printers",
+  "tags": ["printer", "jam", "hardware"],
+  "version": "1.0",
+  "entryCriteria": {
+    "keywords": ["paper jam", "printer stuck", "error code 50"]
+  },
+  "nodes": [
     {
-      "stepNumber": 1,
-      "instruction": "Turn off printer and unplug",
-      "condition": null,
-      "possibleOutcomes": ["Printer powers down"]
-    }
-  ],
-  "decisionPoints": [
+      "nodeId": "START",
+      "type": "question",
+      "question": "Is the printer displaying an error code?",
+      "next": {
+        "yes": "CHECK_CODE",
+        "no": "OPEN_TRAY"
+      }
+    },
     {
-      "question": "Can you see the jammed paper?",
-      "options": [
-        { "answer": "Yes", "nextStep": 3 },
-        { "answer": "No", "nextStep": 5 }
-      ]
+      "nodeId": "CHECK_CODE",
+      "type": "decision",
+      "question": "Is the error code 'E-50'?",
+      "next": {
+        "yes": "REAR_DOOR",
+        "no": "MANUAL_CHECK"
+      }
+    },
+    {
+      "nodeId": "OPEN_TRAY",
+      "type": "action",
+      "instruction": "Open the main paper tray and check for crumpled paper.",
+      "next": {
+        "default": "IS_CLEARED"
+      }
+    },
+    {
+      "nodeId": "IS_CLEARED",
+      "type": "question",
+      "question": "Did you find and remove any paper?",
+      "next": {
+        "yes": "RESOLVED",
+        "no": "MANUAL_CHECK"
+      }
+    },
+    {
+      "nodeId": "RESOLVED",
+      "type": "resolution",
+      "message": "Paper jam resolved. Print a test page to confirm."
     }
-  ],
-  "expectedResolution": "Printer prints test page"
+  ]
 }
 ```
-
-## Testing
-
-See `tests/test-cases.md` for detailed test scenarios including:
-- Clear questions
-- Ambiguous queries
-- Out-of-scope requests
-- Multi-turn conversations
-- Conditional logic paths
 
 ## Limitations
 
@@ -194,7 +229,6 @@ See `tests/test-cases.md` for detailed test scenarios including:
 - Simple HTML stripping for web pages
 
 ## Future Enhancements
-
 - Vector database for semantic search
 - Support for more document formats
 - Web interface
@@ -204,27 +238,3 @@ See `tests/test-cases.md` for detailed test scenarios including:
 ## License
 
 MIT
-```
-
-### .gitignore
-```
-# Dependencies
-node_modules/
-bun.lockb
-
-# Environment
-.env
-
-# Generated data
-data/processes/*.json
-
-# Build output
-dist/
-*.tsbuildinfo
-
-# Logs
-*.log
-
-# OS
-.DS_Store
-Thumbs.db
