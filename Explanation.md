@@ -36,6 +36,56 @@ The system is a two-part engine designed to digitize and execute troubleshooting
 4.  **Graph Traversal**: The LLM acts as an iterator, reading the current node (Question/Action), waiting for user input, and following the `next` pointer logic defined in the JSON.
 5.  **Resolution**: The conversation ends when a "resolution" node is reached or the user exits.
 
+## Process Selection Mechanism
+
+A key question is how the LLM knows **which** JSON file to use among potentially hundreds of files. It does **not** iterate through files itself. Instead, the system uses an **In-Memory Index** pattern.
+
+1.  **Startup Loading**: When `bun chat` starts, `registry.ts` iterates through the `data/processes/` directory. It reads **every** JSON file once and loads them into a fast in-memory `Map<ProcessId, ProcessData>`.
+2.  **No Vector DB**: Currently, there is no vector database or external search engine. The index is purely in RAM.
+3.  **Search Tool (`searchProcesses`)**:
+    - When the user asks "How do I fix a paper jam?", the LLM calls the `searchProcesses` tool with keywords like `"paper jam"`.
+    - The compiled `registry.ts` code performs a **linear scan** of the in-memory Map.
+    - It checks if the keywords exist in:
+      - `processName`
+      - `description`
+      - `tags`
+      - `entryCriteria`
+    - It returns a list of **Process Summaries** (ID + Name + Description) to the LLM.
+4.  **Selection**: The LLM sees this short list of candidates. It then "decides" which ID is the best match and calls `getProcessDetails(selectedId)` to get the full graph for that specific process only.
+
+## Scalability & Performance
+
+**Current Limit**: The current "In-Memory Registry" is designed for hundreds, not thousands, of files. If you load **20,000 JSON files**, the system would likely crash or become unusable.
+
+### Why the Current Approach Hits Limits:
+
+1.  **Memory Overhead (RAM)**: Loading 20,000 large JSON objects into the Node.js heap would exceed the default memory limits (typically ~2GB), causing an `Out of Memory` crash.
+2.  **Startup Latency**: Physically reading and parsing 20k files from the disk at startup would take significant time (10-30+ seconds).
+3.  **Search Latency**: A linear search ($O(N)$) through 20k items for every single chat interaction is too slow for a real-time experience.
+
+### The "Better Way" (Production Architecture)
+
+To scale to 20k, 100k, or millions of processes, we would move to a **RAG (Retrieval-Augmented Generation)** architecture or a **Database-backed** approach.
+
+| Feature      | Current (POC)                  | Scalable (Production)                                                            |
+| :----------- | :----------------------------- | :------------------------------------------------------------------------------- |
+| **Storage**  | Local File System (JSON)       | **Vector Database** (e.g., Pinecone, pgvector) or **SQL DB** (SQLite/PostgreSQL) |
+| **Loading**  | Load **ALL** into RAM at start | **Lazy Loading**: Only fetch metadata first; load full graph only when needed    |
+| **Search**   | Keyword Match (Regex)          | **Semantic Search** (Embeddings) or **Full-Text Search (FTS)**                   |
+| **Indexing** | In-Memory Map                  | **ANN Index** (Approximate Nearest Neighbor) or SQL Index                        |
+
+#### Recommended Hybrid Approach for 20k Files:
+
+1.  **SQLite / DuckDB**: Store the metadata (ID, Name, Description, Tags) in a local SQL database.
+2.  **Full-Text Search (FTS)**: Use SQLite's FTS5 engine for instant keyword search ($O(\log N)$).
+3.  **Lazy Graph Fetch**: Keep the heavy JSON graphs on disk (or in a `JSONB` column). Only load the _specific_ graph node-set into memory _after_ the user selects a process.
+
+This ensures:
+
+- **Startup**: < 1 second (just open DB connection).
+- **RAM**: Minimal (only active conversation context).
+- **Search**: < 10ms.
+
 ## Core Data Structure: Node-Based Graph
 
 Unlike simple linear lists, we use a directed graph model to handle complex logic.
