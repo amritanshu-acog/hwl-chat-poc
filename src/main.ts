@@ -56,8 +56,6 @@ async function startChat() {
         process.exit(0);
       }
 
-      // Show waiting message
-      // Show waiting message
       process.stdout.write("\nAssistant: ");
 
       try {
@@ -68,24 +66,18 @@ async function startChat() {
         );
 
         let fullResponse = "";
-        let toolsUsed = false;
 
-        // Handle tool calls AND text streaming
         for await (const part of result.fullStream) {
           if (part.type === "text-delta") {
-            process.stdout.write(part.text); // Fixed: use 'text' not 'textDelta'
+            process.stdout.write(part.text);
             fullResponse += part.text;
-          } else if (part.type === "tool-call") {
-            toolsUsed = true;
-          } else if (part.type === "tool-result") {
           }
         }
 
-        // If tools were used, the final response comes after tool execution
-        if (toolsUsed && fullResponse.length === 0) {
-          const finalText = await result.text;
-          console.log(finalText);
-          fullResponse = finalText;
+        // Fallback: if streaming produced nothing, get the full text
+        if (fullResponse.length === 0) {
+          fullResponse = await result.text;
+          process.stdout.write(fullResponse);
         }
 
         console.log("\n");
@@ -102,9 +94,7 @@ async function startChat() {
         }
       } catch (apiError) {
         console.error("\nAPI Error:", apiError);
-        console.log(
-          "Please check your GOOGLE_GENERATIVE_AI_API_KEY in .env file\n",
-        );
+        console.log("Please check your API key in .env file\n");
       }
     } catch (error) {
       console.error("\nError:", error);

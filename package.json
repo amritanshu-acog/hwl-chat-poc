@@ -8,7 +8,8 @@
     "chat": "bun src/main.ts",
     "test": "bun tests/evaluate.ts",
     "build": "tsc",
-    "dev": "bun --watch src/main.ts"
+    "dev": "bun --watch src/main.ts",
+    "server": "bun run src/server.ts"
   },
   "devDependencies": {
     "@types/bun": "latest",
@@ -25,6 +26,7 @@
     "@ai-sdk/groq": "^3.0.24",
     "ai": "^6.0.86",
     "dotenv": "^17.3.1",
+    "hono": "^4.11.9",
     "node-fetch": "^3.3.2",
     "pdf-lib": "^1.17.1",
     "pdfjs-dist": "^5.4.624",

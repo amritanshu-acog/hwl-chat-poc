@@ -13,7 +13,7 @@ export function createTools(registry: ProcessRegistry) {
     listAvailableProcesses: tool({
       description:
         "Get a list of all available troubleshooting processes with their descriptions and tags",
-      parameters: z.object({}),
+      inputSchema: z.object({}),
       execute: async () => {
         const processes = registry.listProcesses();
         return {
@@ -29,7 +29,7 @@ export function createTools(registry: ProcessRegistry) {
     getProcessDetails: tool({
       description:
         'Retrieve the complete troubleshooting nodes and details for a specific process. You can use either the processId (e.g. "smtp-connection-issue") or processName (e.g. "SMTP Connection Issue"). Always use the processId from searchProcesses results when available.',
-      parameters: z.object({
+      inputSchema: z.object({
         processId: z
           .string()
           .describe(
@@ -68,7 +68,7 @@ export function createTools(registry: ProcessRegistry) {
     searchProcesses: tool({
       description:
         "Find troubleshooting processes that match the given keywords. Searches process names, descriptions, tags, and entry criteria.",
-      parameters: z.object({
+      inputSchema: z.object({
         keywords: z
           .string()
           .describe(
@@ -90,7 +90,7 @@ export function createTools(registry: ProcessRegistry) {
     askClarification: tool({
       description:
         "When the user query is ambiguous, ask them to clarify by choosing from predefined options. Never present more than 2 options.",
-      parameters: z.object({
+      inputSchema: z.object({
         question: z
           .string()
           .describe("The clarification question to ask the user"),
