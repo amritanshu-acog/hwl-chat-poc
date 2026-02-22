@@ -1,51 +1,146 @@
 import * as readline from "readline/promises";
 import { stdin as input, stdout as output } from "process";
-import { ProcessRegistry } from "./registry.js";
-import { createTools } from "./tools.js";
+import { readFile } from "fs/promises";
+import { join } from "path";
 import { answerTroubleshootingQuestion } from "./llm-client.js";
+import type { ChatResponse } from "./schemas.js";
 
-/**
- * Interactive chat mode for troubleshooting
- */
+const GUIDE_PATH = join(process.cwd(), "data", "guide.yaml");
+
+// ─── CLI renderer ─────────────────────────────────────────────────────────────
+// Renders parsed ChatResponse components as readable terminal output.
+
+function renderResponse(parsed: ChatResponse | ChatResponse[]): void {
+  const items = Array.isArray(parsed) ? parsed : [parsed];
+
+  for (const item of items) {
+    console.log("");
+
+    switch (item.type) {
+      case "steps": {
+        const { title, intro, steps, followUp } = item.data;
+        console.log(`📋 ${title}`);
+        if (intro) console.log(`   ${intro}`);
+        console.log("");
+        steps.forEach((step, i) => {
+          console.log(`   ${i + 1}. ${step.title}`);
+          console.log(`      ${step.body}`);
+        });
+        if (followUp) console.log(`\n❓ ${followUp}`);
+        break;
+      }
+
+      case "choices": {
+        const { question, options } = item.data;
+        console.log(`❓ ${question}`);
+        options.forEach((opt, i) => {
+          const desc = opt.description ? ` — ${opt.description}` : "";
+          console.log(`   ${i + 1}. ${opt.label}${desc}`);
+        });
+        break;
+      }
+
+      case "alert": {
+        const { severity, title, body } = item.data;
+        const icon =
+          severity === "danger" ? "🚨" : severity === "warning" ? "⚠️ " : "ℹ️ ";
+        console.log(`${icon} ${title}`);
+        console.log(`   ${body}`);
+        break;
+      }
+
+      case "checklist": {
+        const { title, items: checkItems } = item.data;
+        console.log(`✅ ${title}`);
+        checkItems.forEach((ci) => console.log(`   ☐ ${ci}`));
+        break;
+      }
+
+      case "image": {
+        const { caption, description } = item.data;
+        console.log(`🖼  ${caption}`);
+        console.log(`   ${description}`);
+        break;
+      }
+
+      case "escalation": {
+        const { reason, summary, ctaLabel } = item.data;
+        console.log(`🔺 Escalation needed`);
+        console.log(`   Reason: ${reason}`);
+        console.log(`   Summary: ${summary}`);
+        console.log(`   → ${ctaLabel}`);
+        break;
+      }
+
+      case "summary": {
+        const { title, body } = item.data;
+        console.log(`✅ ${title}`);
+        console.log(`   ${body}`);
+        break;
+      }
+
+      case "text":
+      default: {
+        console.log(`   ${"data" in item ? item.data.body : String(item)}`);
+        break;
+      }
+    }
+  }
+
+  console.log("");
+}
+
+// ─── Main ─────────────────────────────────────────────────────────────────────
+
 async function startChat() {
   console.log("🔧 Troubleshooting Assistant - Interactive Mode\n");
 
-  // Load processes
-  const registry = new ProcessRegistry();
-  await registry.loadProcesses();
+  // Confirm guide.yaml exists and show available processes
+  let processCount = 0;
+  try {
+    const guide = await readFile(GUIDE_PATH, "utf-8");
+    const blocks = guide
+      .split(/^- processId:/m)
+      .filter((b) => b.trim() && !b.trim().startsWith("#"));
+    processCount = blocks.length;
 
-  if (registry.listProcesses().length === 0) {
+    console.log("Available processes:");
+    for (const block of blocks) {
+      const processId = block.match(/^\s*(.+)/)?.[1]?.trim() ?? "";
+      const processName =
+        block.match(/processName:\s*"?([^"\n]+)"?/)?.[1]?.trim() ?? "";
+      const description =
+        block.match(/description:\s*"?([^"\n]+)"?/)?.[1]?.trim() ?? "";
+      console.log(`  • [${processId}] ${processName}: ${description}`);
+    }
+  } catch {
     console.error(
-      "No processes found. Run extraction first: bun run extract <file>",
+      "❌ guide.yaml not found. Run extraction first: bun run extract <file>",
     );
     process.exit(1);
   }
 
-  console.log("Available processes:");
-  registry.listProcesses().forEach((p) => {
-    console.log(`  • [${p.processId}] ${p.name}: ${p.description}`);
-  });
+  if (processCount === 0) {
+    console.error(
+      "❌ No processes found in guide.yaml. Run extraction first: bun run extract <file>",
+    );
+    process.exit(1);
+  }
+
   console.log('\nType your question or "exit" to quit\n');
 
-  // Create tools
-  const tools = createTools(registry);
-
-  // Conversation history
   const conversationHistory: Array<{
     role: "user" | "assistant";
     content: string;
   }> = [];
 
-  // Create readline interface
   const rl = readline.createInterface({ input, output });
 
   while (true) {
     try {
       const question = await rl.question("You: ");
 
-      if (!question.trim()) {
-        continue;
-      }
+      if (!question.trim()) continue;
 
       if (
         question.toLowerCase() === "exit" ||
@@ -56,39 +151,22 @@ async function startChat() {
         process.exit(0);
       }
 
-      process.stdout.write("\nAssistant: ");
+      console.log("\nAssistant:");
 
       try {
-        const result = await answerTroubleshootingQuestion(
+        const { raw, parsed } = await answerTroubleshootingQuestion(
           question,
-          tools,
           conversationHistory,
         );
 
-        let fullResponse = "";
+        renderResponse(parsed);
 
-        for await (const part of result.fullStream) {
-          if (part.type === "text-delta") {
-            process.stdout.write(part.text);
-            fullResponse += part.text;
-          }
-        }
-
-        // Fallback: if streaming produced nothing, get the full text
-        if (fullResponse.length === 0) {
-          fullResponse = await result.text;
-          process.stdout.write(fullResponse);
-        }
-
-        console.log("\n");
-
-        // Add to conversation history
+        // Store raw string in history so LLM has context next turn
         conversationHistory.push(
           { role: "user", content: question },
-          { role: "assistant", content: fullResponse },
+          { role: "assistant", content: raw },
         );
 
-        // Keep history manageable (last 10 messages)
         if (conversationHistory.length > 10) {
           conversationHistory.splice(0, 2);
         }
@@ -103,5 +181,4 @@ async function startChat() {
   }
 }
 
-// Start the chat
 startChat().catch(console.error);

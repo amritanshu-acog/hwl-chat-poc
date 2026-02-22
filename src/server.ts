@@ -1,8 +1,7 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
-import { streamText as honoStreamText } from "hono/streaming";
-import { ProcessRegistry } from "./registry.js";
-import { createTools } from "./tools.js";
+import { readFile } from "fs/promises";
+import { join } from "path";
 import { answerTroubleshootingQuestion } from "./llm-client.js";
 
 // ─── Types ──────────────────────────────────────────────────────────────────────
@@ -29,21 +28,27 @@ app.use(
   }),
 );
 
-// ─── Startup: load registry & tools once ────────────────────────────────────────
+// ─── Startup ──────────────────────────────────────────────────────────────────
 
-const registry = new ProcessRegistry();
-await registry.loadProcesses();
-const processCount = registry.listProcesses().length;
-const tools = createTools(registry);
-console.log(`\n🚀 Server ready — ${processCount} processes loaded\n`);
+const GUIDE_PATH = join(process.cwd(), "data", "guide.yaml");
+let processCount = 0;
 
-// ─── Helpers ────────────────────────────────────────────────────────────────────
+try {
+  const guide = await readFile(GUIDE_PATH, "utf-8");
+  processCount = (guide.match(/chunk_id:/gm) ?? []).length;
+  console.log(`\n🚀 Server ready — ${processCount} processes in guide.yaml\n`);
+} catch {
+  console.warn("⚠️  guide.yaml not found. Run bun run extract first.");
+}
+
+console.log("🌐 Listening on http://localhost:3000");
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function getSession(sessionId: string): Session {
   const now = Date.now();
   let session = sessions.get(sessionId);
 
-  // Expired or missing → create fresh
   if (!session || now - session.lastAccess > SESSION_TTL_MS) {
     session = { messages: [], lastAccess: now };
     sessions.set(sessionId, session);
@@ -61,25 +66,64 @@ function pruneStale() {
   }
 }
 
-// ─── Routes ─────────────────────────────────────────────────────────────────────
+// ─── Routes ──────────────────────────────────────────────────────────────────
 
 // Health check
 app.get("/api/health", (c) => {
   return c.json({ status: "ok", processesLoaded: processCount });
 });
 
-// List all processes
-app.get("/api/processes", (c) => {
+// List all processes from guide.yaml
+app.get("/api/processes", async (c) => {
   try {
-    const processes = registry.listProcesses();
+    const guide = await readFile(GUIDE_PATH, "utf-8");
+    const processes: Array<{
+      processId: string;
+      processName: string;
+      description: string;
+      tags: string[];
+    }> = [];
+
+    const blocks = guide
+      .split(/^- processId:/m)
+      .filter((b) => b.trim() && !b.trim().startsWith("#"));
+    for (const block of blocks) {
+      const processId = block.match(/^\s*(.+)/)?.[1]?.trim() ?? "";
+      const processName =
+        block.match(/processName:\s*"?([^"\n]+)"?/)?.[1]?.trim() ?? "";
+      const description =
+        block.match(/description:\s*"?([^"\n]+)"?/)?.[1]?.trim() ?? "";
+      const tagsMatch = block.match(/tags:\s*\[([^\]]*)\]/);
+      const tags = tagsMatch
+        ? tagsMatch[1]
+            .split(",")
+            .map((t) => t.trim().replace(/"/g, ""))
+            .filter(Boolean)
+        : [];
+
+      if (processId && processName) {
+        processes.push({ processId, processName, description, tags });
+      }
+    }
+
     return c.json({ processes, count: processes.length });
   } catch (err) {
     console.error("[/api/processes] Error:", err);
-    return c.json({ error: "Failed to list processes" }, 500);
+    return c.json({ error: "Failed to read guide.yaml" }, 500);
   }
 });
 
-// Chat (streaming)
+/**
+ * POST /api/chat
+ *
+ * Request body: { message: string, sessionId: string }
+ *
+ * Response: JSON envelope the frontend uses to render MDX components.
+ * Single response:  { type, data }
+ * Multiple responses: [{ type, data }, { type, data }, ...]
+ *
+ * The frontend MessageBubble reads `type` and renders the matching component.
+ */
 app.post("/api/chat", async (c) => {
   try {
     const body = await c.req.json();
@@ -92,55 +136,35 @@ app.post("/api/chat", async (c) => {
       );
     }
 
-    // Prune stale sessions occasionally
     pruneStale();
-
     const session = getSession(sessionId);
 
-    const result = await answerTroubleshootingQuestion(
+    const { raw, parsed } = await answerTroubleshootingQuestion(
       message,
-      tools,
       session.messages,
     );
 
-    return honoStreamText(c, async (stream) => {
-      let fullResponse = "";
+    // Persist turn — store raw string for conversation history context
+    session.messages.push(
+      { role: "user", content: message },
+      { role: "assistant", content: raw },
+    );
 
-      for await (const part of result.fullStream) {
-        if (part.type === "text-delta") {
-          await stream.write(part.text);
-          fullResponse += part.text;
-        }
-      }
+    while (session.messages.length > SESSION_MAX_MESSAGES) {
+      session.messages.splice(0, 2);
+    }
 
-      // Fallback if streaming produced nothing
-      if (fullResponse.length === 0) {
-        fullResponse = await result.text;
-        await stream.write(fullResponse);
-      }
-
-      // Persist conversation turn
-      session.messages.push(
-        { role: "user", content: message },
-        { role: "assistant", content: fullResponse },
-      );
-
-      // Keep last N messages
-      while (session.messages.length > SESSION_MAX_MESSAGES) {
-        session.messages.splice(0, 2);
-      }
-    });
+    // Return parsed JSON directly — frontend handles rendering
+    return c.json(parsed);
   } catch (err) {
     console.error("[/api/chat] Error:", err);
     return c.json({ error: "Internal server error" }, 500);
   }
 });
 
-// ─── Start ──────────────────────────────────────────────────────────────────────
+// ─── Start ────────────────────────────────────────────────────────────────────
 
 export default {
   port: 3000,
   fetch: app.fetch,
 };
-
-console.log("🌐 Listening on http://localhost:3000");

@@ -1,29 +1,28 @@
-# Troubleshooting System POC
+# HWL Assistant
 
-An LLM-powered troubleshooting assistant that extracts process documentation and answers questions strictly based on that knowledge.
+An LLM-powered helpdesk assistant that extracts knowledge from PDF documentation and answers customer questions strictly based on that knowledge.
 
 ## Features
 
-- 📄 Extract troubleshooting processes from PDFs or web pages
-- 🤖 LLM-powered process extraction using Google Gemini and Vercel AI SDK
-- 💾 Structured JSON storage with Zod validation (Node-based Graph Schema)
-- 💬 Interactive chat interface for troubleshooting questions
-- 🛠️ Tool-based architecture prevents hallucination by strictly following the process graph
-- ✅ Strict adherence to documented processes
-
-## Prerequisites
-
-- Node.js 18+ or Bun
-- Google Gemini API key
+- 📄 Extract knowledge chunks from PDF documents using LLM(currently gpt-4o)
+- 🖼️ Exhaustive image and screenshot description extraction from PDFs
+- 💬 Two-step runtime: retrieval from `guide.yaml` index, then structured response generation
+- 🧩 Structured chunk-based knowledge base with YAML front matter
+- 🛡️ Quality-gated ingestion — only validated chunks reach the live knowledge base
+- 🔺 Built-in escalation path when the assistant cannot resolve an issue
+- 🌐 Hono API server with session management
+- ✅ Zod-validated extraction and response schemas
 
 ## Setup
 
 1. **Install dependencies**:
+
    ```bash
    bun install
    ```
 
 2. **Configure environment**:
+
    ```bash
    cp .env.example .env
    # Edit .env and add your GOOGLE_GENERATIVE_AI_API_KEY
@@ -31,210 +30,180 @@ An LLM-powered troubleshooting assistant that extracts process documentation and
 
 3. **Create data directories**:
    ```bash
-   mkdir -p data/processes
+   mkdir -p data/chunks
    ```
 
 ## Usage
 
-### Extract Processes from Document
+### Extract Knowledge from PDFs
 
-Extract troubleshooting processes from a PDF:
 ```bash
 bun run extract path/to/document.pdf
 ```
 
-Or from a URL:
+Multiple PDFs or a whole directory:
+
 ```bash
-bun run extract https://example.com/troubleshooting-guide
+bun run extract a.pdf b.pdf
+bun run extract ./docs/
 ```
 
 This will:
-- Parse the document (PDF text or HTML content)
-- Use LLM to identify troubleshooting processes and convert them into a structured node-based graph
-- Save each process as a JSON file in `data/processes/` with a unique ID
 
-### Interactive Chat Mode
+- Send the PDF directly to the LLM for deep extraction
+- Identify all distinct processes, procedures, and how-to guides
+- Describe every image, screenshot, and diagram exhaustively
+- Save each concept as a structured `.md` chunk in `data/chunks/`
+- Update `data/guide.yaml` with the discovery index
 
-Start the troubleshooting assistant:
+### Start the API Server
+
+```bash
+bun run server
+```
+
+Runs on `http://localhost:3000`. The frontend connects to `/api/chat`.
+
+### Interactive CLI Chat
+
 ```bash
 bun run chat
 ```
 
-This will:
-- Load all processes from `data/processes/`
-- Start an interactive prompt
-- Answer questions based strictly on loaded processes
-- Guide the user step-by-step through the troubleshooting graph
-- Handle clarifications when needed
-
-Example interaction:
-```
-You: How do I fix a paper jam?
-Assistant: I've found a process for "Printer Paper Jam Resolution". 
-           First, is the printer displaying an error code?
-
-You: Yes
-Assistant: Is the error code 'E-50'?
-...
-```
-
-### Run Tests
-
-Evaluate the system with predefined test cases:
-```bash
-bun run test
-```
-
 ## Architecture
+
+### Separation of Concerns
+
+```
+Offline (extraction)          Online (runtime)
+─────────────────────         ────────────────────────
+PDF → LLM extraction    →     guide.yaml (retrieval index)
+    → chunk .md files   →     chunk .md files (loaded on demand)
+    → guide.yaml        →     LLM generates structured response
+```
+
+**Offline** — ingestion pipeline extracts and validates chunks from PDFs.  
+**Online** — two LLM calls per question: (1) retrieve relevant chunk IDs from guide, (2) generate structured JSON response from loaded chunks.
 
 ### Components
 
-1. **schemas.ts**: Zod schemas for the node-based process graph structure.
-2. **registry.ts**: In-memory storage and retrieval logic for loaded processes.
-3. **tools.ts**: Vercel AI SDK tools definitions (`searchProcesses`, `getProcessDetails`, etc.).
-4. **llm-client.ts**: Gemini integration using Vercel AI SDK (`generateText`, `streamText`) and system prompts.
-5. **extract.ts**: Document parsing (PDF/URL) and extraction orchestration.
-6. **main.ts**: CLI entry point and interactive chat loop.
+| File                    | Role                                                             |
+| ----------------------- | ---------------------------------------------------------------- |
+| `schemas.ts`            | Zod schemas for chunks, guide entries, and chat response types   |
+| `extract.ts`            | PDF ingestion, chunk `.md` assembly, `guide.yaml` updates        |
+| `llm-client.ts`         | Extraction and chat LLM calls, JSON cleaning, response parsing   |
+| `server.ts`             | Hono API server — `/api/chat`, `/api/health`, session management |
+| `main.ts`               | CLI chat loop                                                    |
+| `prompt-loader.ts`      | Loads and caches prompts from `prompts/*.md`                     |
+| `prompts/extraction.md` | System prompt for PDF knowledge extraction                       |
+| `prompts/chat.md`       | System prompt for structured response generation                 |
 
-### Process Schema (Node-Based Graph)
+### Chunk Structure
 
-The system uses a flexible graph structure where processes are composed of interconnected nodes.
+Each chunk is a `.md` file with YAML front matter. One chunk = one concept or question.
 
-```typescript
-// Core Process Structure
-{
-  processId: string;          // Unique identifier (e.g. "printer-jam-fix")
-  processName: string;        // Human readable name
-  description: string;        // What this troubleshoots
-  tags: string[];            
-  version: string;
-  entryCriteria: {
-    keywords: string[];       // Keywords that trigger this process
-    requiredContext: string[];
-  };
-  nodes: ProcessNode[];       // Array of all nodes in the graph
-}
+```markdown
+---
+chunk_id: update-email-preferences-default
+topic: Email Preferences
+summary: >
+  How to set email preferences to receive all notifications by default.
+triggers:
+  - "How do I set all email preferences to default?"
+  - "Subscribe to all notifications in HWL"
+has_conditions: false
+escalation: null
+related_chunks:
+status: active
+---
 
-// Node Structure
-{
-  nodeId: string;             // Unique within process (e.g. "CHECK_POWER")
-  type: "question" | "action" | "decision" | "info" | "resolution";
-  instruction?: string;       // For actions/info
-  question?: string;          // For questions/decisions
-  validationHint?: string;    // How to verify answer
-  next?: {                    // Branching logic
-    "yes": "NODE_ID_1",
-    "no": "NODE_ID_2",
-    "default": "NODE_ID_3"
-  };
-  message?: string;           // For resolution nodes
-}
+## Context
+
+...
+
+## Conditions
+
+(only present when has_conditions: true)
+
+## Constraints
+
+(only present when hard system limits exist)
+
+## Response
+
+...
+
+## Escalation
+
+None required.
+
+## Images
+
+(exhaustive descriptions of all screenshots and diagrams from the PDF)
 ```
 
-### LLM Tools
+### guide.yaml Structure
 
-The system provides these tools to prevent hallucination:
+Auto-generated from chunk front matter. Never edit manually — source of truth is the individual chunk files.
 
-- `searchProcesses`: Find processes by keywords (searches name, description, tags, entry criteria).
-- `getProcessDetails`: Retrieve the full process graph using a specific `processId`.
-- `listAvailableProcesses`: List all loaded processes.
-- `askClarification`: Ask the user to clarify if the request is ambiguous.
+```yaml
+chunks:
+  - chunk_id: update-email-preferences-default
+    topic: Email Preferences
+    summary: >
+      How to set email preferences to receive all notifications by default.
+    triggers:
+      - "How do I set all email preferences to default?"
+    has_conditions: false
+    escalation: null
+    related_chunks:
+    status: active
+    file: data/chunks/update-email-preferences-default.md
+```
 
-## Key Design Decisions
+### Chat Response Types
 
-### Strict Knowledge Boundaries
+The API returns typed JSON that the frontend renders as components:
 
-The LLM is constrained to ONLY use information from loaded JSON files. This prevents:
-- Invented steps
-- Hallucinated information
-- Answers outside the knowledge base
+| Type         | When used                                                |
+| ------------ | -------------------------------------------------------- |
+| `steps`      | Sequential how-to process                                |
+| `choices`    | Clarifying question (required when chunk has conditions) |
+| `alert`      | Warnings or hard system constraints                      |
+| `checklist`  | Verification or pre-flight checks                        |
+| `image`      | Screenshot or diagram description                        |
+| `escalation` | Issue cannot be resolved from documentation              |
+| `summary`    | Issue confirmed resolved                                 |
+| `text`       | Greetings, out-of-scope, conversational replies          |
 
-### Tool-Based Architecture
+## API
 
-Using Vercel AI SDK tools ensures:
-- Structured access to processes
-- Traceable information flow
-- Clear separation between retrieval and generation
-- The LLM acts as an orchestrator, "reading" the graph node-by-node.
-
-### Schema Validation
-
-Zod schemas provide:
-- Type safety at runtime
-- Validation during extraction (ensuring the LLM outputs valid graphs)
-- Guaranteed structure for the chat engine
-
-## Example Process JSON
+### `POST /api/chat`
 
 ```json
-{
-  "processId": "printer-paper-jam",
-  "processName": "Printer Paper Jam Resolution",
-  "description": "Steps to resolve paper jam errors in office printers",
-  "tags": ["printer", "jam", "hardware"],
-  "version": "1.0",
-  "entryCriteria": {
-    "keywords": ["paper jam", "printer stuck", "error code 50"]
-  },
-  "nodes": [
-    {
-      "nodeId": "START",
-      "type": "question",
-      "question": "Is the printer displaying an error code?",
-      "next": {
-        "yes": "CHECK_CODE",
-        "no": "OPEN_TRAY"
-      }
-    },
-    {
-      "nodeId": "CHECK_CODE",
-      "type": "decision",
-      "question": "Is the error code 'E-50'?",
-      "next": {
-        "yes": "REAR_DOOR",
-        "no": "MANUAL_CHECK"
-      }
-    },
-    {
-      "nodeId": "OPEN_TRAY",
-      "type": "action",
-      "instruction": "Open the main paper tray and check for crumpled paper.",
-      "next": {
-        "default": "IS_CLEARED"
-      }
-    },
-    {
-      "nodeId": "IS_CLEARED",
-      "type": "question",
-      "question": "Did you find and remove any paper?",
-      "next": {
-        "yes": "RESOLVED",
-        "no": "MANUAL_CHECK"
-      }
-    },
-    {
-      "nodeId": "RESOLVED",
-      "type": "resolution",
-      "message": "Paper jam resolved. Print a test page to confirm."
-    }
-  ]
-}
+// Request
+{ "message": "How do I set email preferences?", "sessionId": "abc123" }
+
+// Response — single component
+{ "type": "steps", "data": { "title": "...", "steps": [...] } }
+
+// Response — multiple components
+[
+  { "type": "alert", "data": { "severity": "warning", "title": "...", "body": "..." } },
+  { "type": "steps", "data": { "title": "...", "steps": [...] } }
+]
 ```
 
-## Limitations
+### `GET /api/health`
 
-- No database (in-memory only)
-- No web server (CLI only)
-- Basic PDF text extraction
-- Simple HTML stripping for web pages
+```json
+{ "status": "ok", "processesLoaded": 12 }
+```
 
-## Future Enhancements
-- Vector database for semantic search
-- Support for more document formats
-- Web interface
-- Multi-language support
-- Process versioning
+## Content Lifecycle
 
-## License
-
-MIT
+| Operation  | What happens                                                       |
+| ---------- | ------------------------------------------------------------------ |
+| **Add**    | Run `bun run extract file.pdf` — new chunks created, guide updated |
+| **Update** | Delete the old `.md` file, re-run extract — guide entry replaced   |
+| **Delete** | Delete the `.md` file, delete its entry from `guide.yaml`          |

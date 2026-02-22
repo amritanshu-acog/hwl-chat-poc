@@ -1,10 +1,12 @@
 import { google } from "@ai-sdk/google";
 import { groq } from "@ai-sdk/groq";
+import { createOpenAI } from "@ai-sdk/openai";
+import { azure } from "@ai-sdk/azure";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
 /** Supported provider identifiers */
-export type ProviderName = "google" | "groq";
+export type ProviderName = "google" | "groq" | "azure";
 
 /** Configuration for a single provider */
 export interface ProviderConfig {
@@ -36,6 +38,14 @@ const PROVIDERS: Record<ProviderName, ProviderConfig> = {
     createModel: (modelId: string) => groq(modelId) as any,
     defaultModel: "llama-3.3-70b-versatile",
   },
+  azure: {
+    envKey: "AZURE_API_KEY",
+    createModel: (_modelId: string) => {
+      const deployment = process.env.AZURE_OPENAI_DEPLOYMENT_NAME!;
+      return azure(deployment) as any;
+    },
+    defaultModel: "gpt-4o",
+  },
 };
 
 // ─── Active Provider Resolution ────────────────────────────────────────────────
@@ -44,7 +54,7 @@ const PROVIDERS: Record<ProviderName, ProviderConfig> = {
  * Resolve which provider to use.
  *
  * Priority:
- *   1. `AI_PROVIDER` env var  (e.g. `AI_PROVIDER=groq`)
+ *   1. `AI_PROVIDER` env var  (e.g. `AI_PROVIDER=azure`)
  *   2. First provider whose API key is present in the environment
  *
  * @returns The resolved provider name
@@ -88,7 +98,7 @@ function resolveProviderName(): ProviderName {
  * Get the active model instance, resolved from environment configuration.
  *
  * You can override the model ID via the `AI_MODEL` env var:
- *   `AI_MODEL=gemini-2.0-flash bun run chat`
+ *   `AI_MODEL=gpt-4o bun run chat`
  *
  * @returns An AI SDK–compatible model instance
  */

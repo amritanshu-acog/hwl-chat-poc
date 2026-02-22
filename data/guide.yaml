@@ -1,0 +1,89 @@
+# Knowledge Base Guide Index
+# Auto-generated from chunk front matter — do not edit manually
+# Source of truth: individual chunk .md files in data/chunks/
+
+chunks:
+
+  - chunk_id: update-email-preferences-manual
+    topic: Update Email Preferences (Manual Selection)
+    summary: >
+      This article explains how users can manually customize email notifications for job titles and types in HWL.
+    triggers:
+      - "How do I customize email preferences in HWL?"
+      - "Change email notifications for specific job titles"
+      - "Manually update HWL email preferences"
+    has_conditions: false
+    escalation: null
+    related_chunks:
+    status: active
+    file: data/chunks/update-email-preferences-manual.md
+
+  - chunk_id: update-email-preferences-default
+    topic: Update Email Preferences (Default Selection)
+    summary: >
+      This article explains how users can set their email preferences to receive all notifications by default in HWL.
+    triggers:
+      - "How do I set all email preferences to default?"
+      - "Subscribe to all notifications in HWL"
+      - "Set HWL email preferences to default"
+    has_conditions: false
+    escalation: null
+    related_chunks:
+    status: active
+    file: data/chunks/update-email-preferences-default.md
+
+  - chunk_id: requisitions-filtering
+    topic: Requisition Filtering
+    summary: >
+      Explains how to filter and sort requisition details on the Requisition tab.
+    triggers:
+      - "filter requisitions"
+      - "sort requisition by facility"
+      - "requisition tab filters"
+    has_conditions: false
+    escalation: "null"
+    related_chunks:
+    status: active
+    file: data/chunks/requisitions-filtering.md
+
+  - chunk_id: candidate-status-buttons-actions
+    topic: Candidate Status Buttons and Actions
+    summary: >
+      Lists the actions available in the Candidate Status column under the Requisition tab.
+    triggers:
+      - "candidate status icons"
+      - "actions for onboarding candidates"
+      - "what does credentialing error mean"
+    has_conditions: false
+    escalation: "null"
+    related_chunks:
+    status: active
+    file: data/chunks/candidate-status-buttons-actions.md
+
+  - chunk_id: full-view-requisition-details
+    topic: Requisition Full Details
+    summary: >
+      Describes how to view full requisition details.
+    triggers:
+      - "how to view requisition details"
+      - "requisition full view"
+      - "navigation to full requisition"
+    has_conditions: false
+    escalation: "null"
+    related_chunks:
+    status: active
+    file: data/chunks/full-view-requisition-details.md
+
+  - chunk_id: propose-candidate-to-requisition
+    topic: Propose Candidate to Requisition
+    summary: >
+      Details steps to propose a candidate to a requisition posting.
+    triggers:
+      - "how to propose a candidate"
+      - "candidate proposal steps"
+      - "submit candidate for requisition"
+    has_conditions: true
+    escalation: "null"
+    related_chunks:
+    status: active
+    file: data/chunks/propose-candidate-to-requisition.md
