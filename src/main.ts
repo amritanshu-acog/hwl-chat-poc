@@ -100,15 +100,14 @@ async function startChat() {
   try {
     const guide = await readFile(GUIDE_PATH, "utf-8");
     const blocks = guide
-      .split(/^- processId:/m)
+      .split(/^\s{2}- chunk_id:/m)
       .filter((b) => b.trim() && !b.trim().startsWith("#"));
     processCount = blocks.length;
 
     console.log("Available processes:");
     for (const block of blocks) {
-      const processId = block.match(/^\s*(.+)/)?.[1]?.trim() ?? "";
-      const processName =
-        block.match(/processName:\s*"?([^"\n]+)"?/)?.[1]?.trim() ?? "";
+      const processId = block.match(/^\s*([^\n]+)/)?.[1]?.trim() ?? "";
+      const processName = block.match(/\n\s+topic:\s*(.+)/)?.[1]?.trim() ?? "";
       const description =
         block.match(/description:\s*"?([^"\n]+)"?/)?.[1]?.trim() ?? "";
       console.log(`  • [${processId}] ${processName}: ${description}`);

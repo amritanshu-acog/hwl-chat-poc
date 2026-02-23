@@ -83,8 +83,6 @@ export function cleanJson(raw: string): string {
   }
 
   if (endIndex !== -1) cleaned = cleaned.slice(0, endIndex + 1).trim();
-
-  // Fix trailing commas
   cleaned = cleaned.replace(/,\s*}/g, "}").replace(/,\s*]/g, "]");
 
   return cleaned;
@@ -169,21 +167,20 @@ Return ONLY a raw JSON array. Start with [ and end with ]. No markdown fences. N
 
   console.log(`\n🔎 Parsed ${arr.length} chunk(s) from LLM output:`);
   arr.forEach((item, i) => {
-    console.log(`  [${i}] chunk_id:      ${item?.chunk_id ?? "MISSING"}`);
-    console.log(`       topic:         ${item?.topic ?? "MISSING"}`);
-    console.log(`       has_conditions:${item?.has_conditions ?? "MISSING"}`);
-    console.log(`       triggers:      ${item?.triggers?.length ?? 0}`);
+    console.log(`  [${i}] chunk_id:       ${item?.chunk_id ?? "MISSING"}`);
+    console.log(`       topic:          ${item?.topic ?? "MISSING"}`);
+    console.log(`       has_conditions: ${item?.has_conditions ?? "MISSING"}`);
+    console.log(`       triggers:       ${item?.triggers?.length ?? 0}`);
     console.log(
-      `       images:        ${item?.image_descriptions?.length ?? 0}`,
+      `       images:         ${item?.image_descriptions?.length ?? 0}`,
     );
-    console.log(`       has context:   ${!!item?.context}`);
-    console.log(`       has response:  ${!!item?.response}`);
+    console.log(`       has context:    ${!!item?.context}`);
+    console.log(`       has response:   ${!!item?.response}`);
   });
   console.log("");
 
   const validated: LLMChunkOutput[] = [];
   for (const item of arr) {
-    // Guard: if has_conditions is true, conditions must be present
     if (item?.has_conditions === true && !item?.conditions) {
       console.warn(
         `  ⚠️  chunk "${item?.chunk_id}" has has_conditions:true but no conditions field — flagging for review`,
@@ -229,6 +226,8 @@ async function retrieveRelevantChunks(
   console.log("🔍 Step 1 — Retrieval: finding relevant chunks from guide...");
 
   const retrievalPrompt = `You are a retrieval assistant. Given the user's question and the guide index below, return the chunk_ids of the 2-3 most relevant chunks.
+
+Only return chunks with status: active.
 
 GUIDE INDEX:
 ${guide}
@@ -305,9 +304,11 @@ export async function answerTroubleshootingQuestion(
     role: "user" | "assistant";
     content: string;
   }> = [],
+  mode: "clarify" | "answer" = "answer",
 ): Promise<ChatResult> {
   console.log("🔍 Calling LLM...");
   console.log("Question:", question);
+  console.log("Mode:", mode);
 
   // ── Step 1: retrieve chunk IDs ───────────────────────────────────────────────
   const chunkIds = await retrieveRelevantChunks(question, conversationHistory);
@@ -317,13 +318,12 @@ export async function answerTroubleshootingQuestion(
   const chunkContents: string[] = [];
 
   if (chunkIds.length > 0) {
-    // Parse chunk entries from guide.yaml — split on chunk_id markers under "chunks:"
     const blocks = guide.split(/^\s{2}- chunk_id:/m).filter((b) => b.trim());
 
     for (const block of blocks) {
       const chunk_id = block.match(/^\s*([^\n]+)/)?.[1]?.trim() ?? "";
       if (chunkIds.includes(chunk_id)) {
-        const file = block.match(/file:\s*(.+)/)?.[1]?.trim();
+        const file = block.match(/\n\s+file:\s*(.+)/)?.[1]?.trim();
         if (file) {
           try {
             const content = await loadChunk(file);
@@ -345,13 +345,19 @@ export async function answerTroubleshootingQuestion(
       ? `\n\nRELEVANT CHUNK DOCUMENTATION:\n${chunkContents.join("\n\n")}`
       : "\n\nRELEVANT CHUNK DOCUMENTATION:\nNo matching chunks found for this query.";
 
+  const modeBlock = `\n\nCURRENT MODE: ${mode.toUpperCase()}\n${
+    mode === "clarify"
+      ? "The user needs clarification. Prefer choices or alert responses. Do not jump to full steps unless the situation is already unambiguous."
+      : "Answer mode. If the documentation supports it, go directly to steps. Do not ask unnecessary clarifying questions."
+  }`;
+
   console.log(
-    `📦 Step 2 — Generating response with ${chunkContents.length} chunk(s)...\n`,
+    `📦 Step 2 — Generating response with ${chunkContents.length} chunk(s) in ${mode} mode...\n`,
   );
 
   const { text } = await generateText({
     model: model(),
-    system: systemPrompt + contextBlock,
+    system: systemPrompt + contextBlock + modeBlock,
     messages: [...conversationHistory, { role: "user", content: question }],
   });
 

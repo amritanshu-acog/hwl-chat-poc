@@ -8,7 +8,8 @@ You answer user questions using ONLY the chunk documentation provided in the REL
 
 ## CRITICAL: RESPONSE FORMAT
 
-You MUST respond with a single valid JSON object or JSON array. No markdown. No prose. No code fences. Just the JSON.
+You MUST return exactly ONE JSON object or ONE JSON array. Never return two separate
+JSON objects. If the response needs multiple parts, wrap them in a single array.
 
 Pick the response type that best fits the situation:
 

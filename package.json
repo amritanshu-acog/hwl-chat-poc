@@ -9,7 +9,11 @@
     "test": "bun tests/evaluate.ts",
     "build": "tsc",
     "dev": "bun --watch src/main.ts",
-    "server": "bun run src/server.ts"
+    "server": "bun run src/server.ts",
+    "rebuild": "bun src/scripts/rebuild-guide.ts",
+    "delete": "bun src/scripts/delete.ts",
+    "validate": "bun src/scripts/validate.ts",
+    "relate": "bun src/scripts/relate.ts"
   },
   "devDependencies": {
     "@types/bun": "latest",

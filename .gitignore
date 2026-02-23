@@ -7,8 +7,7 @@ dist
 *.tgz
 
 # Generated data - don't commit extracted processes
-data/processes/
-data/processes/*.json
+data/chunks/
 
 # code coverage
 coverage
