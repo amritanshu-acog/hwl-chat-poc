@@ -1,0 +1,543 @@
+# HELP.md — What This Project Is and How to Use It
+
+---
+
+## What This Project Does
+
+This is a **knowledge-base chatbot** for a helpdesk product (HWL Agency platform).
+
+The system has two modes:
+
+**1. Offline (ingestion) — you run this manually:**
+You give it PDF documents (user manuals, how-to guides, FAQ sheets).
+It reads them with an LLM, extracts every piece of knowledge into small structured files called "chunks", and builds an index file called `guide.yaml`.
+
+**2. Online (chat) — runs as a server:**
+When a user asks a question, the system:
+
+1. Looks at `guide.yaml` to find the 2–3 most relevant chunks
+2. Loads those chunk files from disk
+3. Feeds them to the LLM along with the question
+4. Returns a structured JSON answer (steps, alerts, choices, etc.)
+
+**The golden rule:** The LLM can ONLY answer from what is in the knowledge base. It cannot make things up from general knowledge. If it's not in a chunk, the bot says it doesn't know.
+
+---
+
+## The Files on Disk
+
+```
+troubleshooting-poc/
+│
+├── data/
+│   ├── guide.yaml          ← The index. Lists every chunk: topic, summary, triggers, file path.
+│   └── chunks/             ← One .md file per knowledge chunk. This is the actual knowledge.
+│       ├── timecard-invoices-process.md
+│       ├── email-notification-preferences.md
+│       └── ... (21 chunks currently)
+│
+├── src/
+│   ├── extract.ts          ← Reads PDFs, calls LLM, writes chunk .md files + guide.yaml
+│   ├── llm-client.ts       ← Wraps all LLM calls (extraction + chat retrieval + generation)
+│   ├── server.ts           ← Hono HTTP API server (POST /api/chat, GET /api/health)
+│   ├── main.ts             ← Interactive CLI chat (type questions in terminal)
+│   ├── config.ts           ← NEW: Centralized pipeline configuration (sizes, paths)
+│   ├── schemas.ts          ← Zod type definitions for chunks, guide entries, LLM output
+│   ├── providers.ts        ← Provider registry (OpenAI / Azure / Google / Groq)
+│   ├── chunker.ts          ← NEW: Deterministic document boundary engine
+│   │
+│   ├── prompts/
+│   │   ├── extraction.md   ← System prompt for extracting procedure PDFs
+│   │   ├── qna-extraction.md  ← NEW: System prompt for FAQ/Q&A PDFs
+│   │   └── chat.md         ← System prompt for answering user questions
+│   │
+│   └── scripts/
+│       ├── ingest.ts       ← NEW: Full pipeline orchestrator (extract+validate+relate+rebuild)
+│       ├── validate.ts     ← Quality check chunks (Zod structure + LLM clarity/completeness)
+│       ├── relate.ts       ← Find related chunks and wire them together
+│       ├── rebuild-guide.ts ← Rebuild guide.yaml targeting active chunks
+│       ├── validate-guide.ts ← NEW: Verify guide.yaml structure with Zod
+│       ├── perf-report.ts  ← NEW: Analyzes and calculates metrics from ingestion reports
+│       ├── e2e-test.ts     ← NEW: Structural tests (no LLM, runs in seconds)
+│       ├── source-manifest.ts ← NEW: Track which PDF produced which chunks
+│       └── delete.ts       ← Remove a chunk from the KB
+│
+├── test-corpus/
+│   └── manifest.json       ← NEW: Test corpus definition for regression testing
+│
+├── source-manifest.json    ← NEW: Created at runtime. Maps PDF → chunk_ids + hash
+├── package.json            ← All runnable commands are here
+├── .env                    ← Your API keys (copy from .env.example)
+└── HELP.md                 ← This file
+```
+
+---
+
+## All Commands — What to Run and What to Expect
+
+### 1. `bun run ingest <pdf-file-or-directory>`
+
+**What it does:** Full pipeline in one command. Runs all 4 steps below in order.
+**When to use:** Every time you add new PDFs to the knowledge base.
+
+```bash
+bun run ingest ./my-manual.pdf
+bun run ingest ./docs/             # all PDFs in a folder
+bun run ingest a.pdf b.pdf         # multiple files
+```
+
+**Expected output:**
+
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  🚀 HWL Knowledge Base — Ingestion Orchestrator
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📋 Sources queued for ingestion:
+   • my-manual.pdf
+   Total: 1 PDF(s)
+
+[1/4] Extract — PDF → chunks + guide.yaml
+  ✓ Created: some-topic.md
+  ✓ Created: another-topic.md
+
+[2/4] Validate — Zod structural + LLM quality gates
+  ✅ some-topic.md — structure OK
+  ✅ another-topic.md — structure OK
+
+[3/4] Relate — populate related_chunks across KB
+  Relating some-topic... ✓ [another-topic]
+
+[4/4] Rebuild — regenerate guide.yaml from chunk front matter
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  ✅ Ingestion Complete
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  Started at:    2026-02-24T...
+  Total time:    45.2s
+  Sources:       1 PDF(s)
+  Active chunks: 23
+
+  Step Results:
+    ✅ extract   42.1s
+    ✅ validate   8.3s
+    ✅ relate     3.1s
+    ✅ rebuild    0.2s
+
+  Knowledge base is ready. Start the server with:
+    bun run server
+```
+
+---
+
+### 2. `bun run extract [--type=qna] <pdf-file-or-directory>`
+
+**What it does:** Step 1 only. Reads the PDF, calls the LLM to extract knowledge chunks, writes `.md` files to `data/chunks/`. Updates `source-manifest.json`.
+**When to use:** If you only want extraction without validation (rare). Passing `--type=qna` uses a specialized prompt for Q&A documents instead of standard procedures.
+
+```bash
+bun run extract ./my-manual.pdf
+bun run extract --type=qna ./my-faq.pdf
+```
+
+**Expected output:**
+
+```
+🚀 Starting extraction for 1 source(s)...
+
+━━━ [1/1] my-manual.pdf ━━━
+
+📄 Reading PDF: /path/to/my-manual.pdf
+  ↳ PDF size: 420.3 KB
+
+⏱  LLM extraction [my-manual.pdf]: 38.2s
+  ✓ Created: some-topic.md
+    Topic:   Timecards
+    Summary: How to submit a timecard in HWL Agency
+    Triggers: 3
+    Images:  2
+    Conditions: false
+
+📋 source-manifest.json updated
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📊 Extraction Summary
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   Sources processed : 1
+   Chunks created    : 3
+   Chunks updated    : 0
+   Sources failed    : 0
+   Total time        : 38.4s
+   Output directory  : /path/to/data/chunks
+   Guide index       : data/guide.yaml
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Next steps:
+  1. Validate chunks:  bun run validate
+  2. Link related:     bun run relate
+  3. Rebuild index:    bun run rebuild
+  — or run all steps: bun run ingest <sources>
+```
+
+---
+
+### 3. `bun run validate`
+
+**What it does:** Two-phase quality check on all active chunks.
+
+- **Phase 1 (instant, no LLM):** Checks that each `.md` file has valid YAML front matter, required fields, and required sections (`## Context`, `## Response`, `## Escalation`). Marks bad chunks `status: review` immediately.
+- **Phase 2 (LLM):** Checks Clarity, Consistency, and Completeness of each structurally valid chunk.
+
+```bash
+bun run validate
+```
+
+**Expected output:**
+
+```
+🔍 Validating chunks (Phase 1: Structural · Phase 2: LLM Quality)...
+
+Phase 1 — Zod structural check: front-matter schema + required sections
+Phase 2 — LLM quality gates:    Clarity · Consistency · Completeness
+
+━━━ Phase 1: Structural Validation ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ✅ timecard-invoices-process.md — structure OK
+  ✅ email-notification-preferences.md — structure OK
+  ...
+
+  Structural: 21 passed, 0 failed
+
+━━━ Phase 2: LLM Quality Gates ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📂 Sending 21 structurally valid active chunk(s) to LLM...
+
+  ✅ timecard-invoices-process        Clarity ✓  Consistency ✓  Completeness ✓
+  ✅ email-notification-preferences   Clarity ✓  Consistency ✓  Completeness ✓
+  ...
+
+✅ Validation complete — 21 passed, 0 failed
+```
+
+**If a chunk fails Phase 1:**
+
+```
+  ❌ some-chunk.md — structural FAIL
+       • front-matter.summary: Required
+       • Missing required markdown section: "## Response"
+       → Marked as status: review (structural failure)
+```
+
+---
+
+### 4. `bun run relate`
+
+**What it does:** Asks the LLM to find which chunks are related to each other. Writes the relationships into each chunk's `related_chunks` front matter field. This helps the chat system find relevant context even when the exact match isn't obvious.
+
+```bash
+bun run relate
+```
+
+**Expected output:**
+
+```
+🔗 Running post-aggregation related chunks pass...
+
+📂 Processing 21 active chunk(s)...
+
+  Relating timecard-invoices-process... ✓ [expense-invoices-process]
+  Relating email-notification-preferences... ✓ [update-email-preferences-default-selection, update-email-preferences-manual-selection]
+  ...
+
+✅ Related chunks written for 21 chunk(s)
+
+🔨 Rebuilding guide.yaml...
+✅ Done.
+```
+
+---
+
+### 5. `bun run rebuild`
+
+**What it does:** Reads every `.md` file in `data/chunks/`, extracts the YAML front matter from each **active** chunk, and regenerates `guide.yaml` from scratch for retrieval. It intentionally ignores chunks marked as "review" or "deprecated". Use this any time you edit chunk files manually or after deletions.
+
+```bash
+bun run rebuild
+```
+
+**Expected output:**
+
+```
+🔨 Rebuilding guide.yaml from 21 active chunk(s)...
+✅ guide.yaml rebuilt.
+```
+
+---
+
+### 6. `bun run validate-guide`
+
+**What it does:** Fast structural check — reads `guide.yaml` and validates every entry against the GuideEntry schema using Zod. No LLM calls. Runs in under 1 second.
+
+```bash
+bun run validate-guide
+```
+
+**Expected output (all pass):**
+
+```
+🔍 Validating guide.yaml against GuideEntrySchema...
+
+📂 Found 21 guide.yaml entry/entries
+
+  ✅ candidate-status-column-buttons
+  ✅ dashboard-detailed-view
+  ✅ email-notification-preferences
+  ...
+
+📊 guide.yaml Validation Summary
+   Entries checked: 21
+   Passed:          21
+   Failed:          0
+
+✅ All guide.yaml entries are structurally valid.
+```
+
+---
+
+### 7. `bun run perf-report`
+
+**What it does:** Reads structured ingestion reports from `data/reports/` and aggregates metrics, providing an average duration summary for each pipeline step across runs.
+
+```bash
+bun run perf-report
+```
+
+**Expected output:**
+
+```
+📊 HWL Ingestion Performance Report
+════════════════════════════════════════
+  Processed Runs:  1
+  Total Sources:   1
+  Avg Run Time:    116.7s
+
+  Average Time per Step:
+    • extract         100.9s
+    • validate        10.1s
+...
+```
+
+---
+
+### 8. `bun run e2e-test` (also `bun run test`)
+
+**What it does:** Full structural regression test. Checks that:
+
+- `guide.yaml` exists and has entries
+- Every guide entry has a matching `.md` file on disk
+- Every `.md` file has a guide entry
+- Every chunk passes the front-matter Zod schema
+- Every chunk has `## Context`, `## Response`, `## Escalation` sections
+- No chunks have the old `chunk_id:` prefix bug in `related_chunks`
+- Every guide.yaml entry passes GuideEntrySchema
+
+No LLM calls. Runs in under 3 seconds.
+
+```bash
+bun run e2e-test
+```
+
+**Expected output (healthy KB):**
+
+```
+🧪 HWL Knowledge Base — End-to-End Structural Tests
+
+═══════════════════════════════════════════════════════
+
+📁 Test: File System Integrity
+  ✅ guide.yaml exists
+  ✅ data/chunks/ directory exists
+
+📋 Test: guide.yaml ↔ Filesystem Consistency
+  ✅ guide.yaml has at least 1 entry
+  ✅ data/chunks/ has at least 1 .md file
+  ✅ guide entry 'timecard-invoices-process' has .md file
+  ...
+
+🔍 Test: Chunk Front-Matter Schema Validation
+  ✅ timecard-invoices-process.md front-matter schema
+  ...
+
+📄 Test: Required Markdown Sections
+  ✅ timecard-invoices-process.md has ## Context
+  ✅ timecard-invoices-process.md has ## Response
+  ✅ timecard-invoices-process.md has ## Escalation
+  ...
+
+🔗 Test: related_chunks Format Normalisation (GAP-D1-05)
+  ✅ timecard-invoices-process.md has no 'chunk_id:' prefix in related_chunks
+  ...
+
+📊 E2E Test Results
+   Total:   172
+   Passed:  172
+   Failed:  0
+
+✅ All structural invariants pass.
+```
+
+---
+
+### 9. `bun run server`
+
+**What it does:** Starts the HTTP API server on port 3000 (or `PORT` env var).
+
+```bash
+bun run server
+```
+
+**Expected output:**
+
+```
+🚀 HWL Assistant server running on http://localhost:3000
+
+Routes:
+  POST /api/chat    — Ask a question
+  GET  /api/health  — Check server status
+```
+
+**Test it:**
+
+```bash
+# Health check
+curl http://localhost:3000/api/health
+
+# Ask a question
+curl -X POST http://localhost:3000/api/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message": "How do I submit a timecard?", "sessionId": "test123"}'
+```
+
+**Chat response shape:**
+
+```json
+[
+  {
+    "type": "steps",
+    "data": {
+      "title": "How to submit a timecard",
+      "steps": ["Step 1: ...", "Step 2: ..."]
+    }
+  }
+]
+```
+
+---
+
+### 10. `bun run chat`
+
+**What it does:** Interactive terminal chat. Type questions, get answers. No server needed.
+
+```bash
+bun run chat
+```
+
+**Expected output:**
+
+```
+💬 HWL Assistant — type your question (or 'exit')
+
+You: How do I reset my password?
+Assistant: [structured answer from knowledge base]
+
+You: exit
+```
+
+---
+
+### 11. `bun run delete`
+
+**What it does:** Removes a chunk by chunk_id from both `data/chunks/` and `guide.yaml`.
+
+```bash
+bun run delete timecard-invoices-process
+```
+
+**Expected output:**
+
+```
+🗑️  Deleting chunk: timecard-invoices-process
+  ✅ Removed: data/chunks/timecard-invoices-process.md
+  ✅ Removed from guide.yaml
+```
+
+---
+
+## What I Assumed About How Things Work
+
+1. **The LLM decides the knowledge, not the developer.** You give it a PDF and it extracts what it thinks is important. You don't write the chunks by hand.
+
+2. **`guide.yaml` is the index, `.md` files are the truth.** `guide.yaml` is generated from the `.md` files — so if they disagree, run `bun run rebuild` to fix it.
+
+3. **Chunks are self-contained.** A user reading one chunk must be able to understand it completely without reading any other chunk. This is enforced by the extraction prompt.
+
+4. **The system only knows what's in the PDFs.** If a user asks about something not in any chunk, the bot says it doesn't know. This is by design.
+
+5. **Q&A format PDFs are different from procedure PDFs.** Procedure PDFs = how-to guides and step-by-step instructions. Q&A PDFs = FAQ documents with questions and answers. You can now use the `--type=qna` flag during extraction (`bun run extract --type=qna <doc>`) to apply the specialized Q&A extraction prompt. Otherwise, it defaults to the standard procedure logic.
+
+---
+
+## What Was Built During Drop 1 (this session)
+
+Everything below is **new** — it did not exist before:
+
+| File                             | What it does                                                                                                                       |
+| -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `src/chunker.ts`                 | Deterministic document segmenter — splits documents by headings before calling the LLM, so chunk boundaries are stable across runs |
+| `src/scripts/ingest.ts`          | One-command pipeline: `bun run ingest` runs extract → validate → relate → rebuild                                                  |
+| `src/scripts/validate-guide.ts`  | `bun run validate-guide` — fast Zod check on guide.yaml                                                                            |
+| `src/scripts/e2e-test.ts`        | `bun run e2e-test` — 172 structural checks, no LLM, runs in seconds                                                                |
+| `src/scripts/source-manifest.ts` | Tracks which PDF produced which chunks (for deduplication and provenance)                                                          |
+| `src/prompts/qna-extraction.md`  | Extraction prompt for FAQ/Q&A format documents                                                                                     |
+| `test-corpus/manifest.json`      | Test corpus definition for regression testing                                                                                      |
+| `HELP.md`                        | This file                                                                                                                          |
+
+**Modified existing files:**
+
+| File                           | What changed                                                                                        |
+| ------------------------------ | --------------------------------------------------------------------------------------------------- |
+| `src/extract.ts`               | + source-manifest wiring, + perf timing, + structured summary report, + context-window size warning |
+| `src/llm-client.ts`            | + `console.time` around both LLM calls (retrieval + generation)                                     |
+| `src/scripts/validate.ts`      | + Phase 1 Zod structural check before LLM calls                                                     |
+| `src/scripts/rebuild-guide.ts` | + imports GuideEntry from schemas.ts (removed duplicate), + strips `chunk_id:` prefixes             |
+| `src/scripts/relate.ts`        | + strips `chunk_id:` prefixes when writing related_chunks                                           |
+| `src/prompts/extraction.md`    | + 6 new edge case rules for short/long/nested/shared procedures                                     |
+| `package.json`                 | + `ingest`, `validate-guide`, `e2e-test` scripts; fixed broken `test` script                        |
+| `README.md`                    | + Full command reference, ingestion workflow checklist, env variable table, troubleshooting section |
+
+---
+
+## Quick Start (from zero)
+
+```bash
+# 1. Copy env file and fill in your API key
+cp .env.example .env
+# Edit .env: set AI_PROVIDER=openai and OPENAI_API_KEY=sk-...
+
+# 2. Install dependencies
+bun install
+
+# 3. Ingest a PDF
+bun run ingest ./your-manual.pdf
+
+# 4. Verify everything is healthy
+bun run e2e-test
+
+# 5. Start the server
+bun run server
+
+# 6. Test a question
+curl -X POST http://localhost:3000/api/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message": "How do I submit a timecard?", "sessionId": "s1"}'
+```

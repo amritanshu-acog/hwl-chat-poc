@@ -1,0 +1,46 @@
+{
+  "/Users/amritanshu/Desktop/AI Chat bot/troubleshooting-poc/HWL Agency_Update Email Preferences V2.pdf": {
+    "hash": "47a88b83c0b5ce01b27c865597267d928550796917b28d6cdadc017e30b5c9f2",
+    "extracted_at": "2026-02-24T11:42:33.961Z",
+    "chunk_ids": [
+      "hwl-agency-update-email-preferences-v2-update-email-preferen-64be7acd",
+      "hwl-agency-update-email-preferences-v2-manual-selection-f3bc2eff",
+      "hwl-agency-update-email-preferences-v2-default-selection-9c32fbe5"
+    ],
+    "size_bytes": 230530
+  },
+  "/Users/amritanshu/Desktop/AI Chat bot/troubleshooting-poc/HWL Agency_Staff Pool V3.pdf": {
+    "hash": "7c5a73bd28476a0e235edf8c1314acf41a9579a5b1aba08718d6ac2b443803cc",
+    "extracted_at": "2026-02-24T10:48:29.983Z",
+    "chunk_ids": [
+      "hwl-agency-staff-pool-v3-part-1-918b5352",
+      "hwl-agency-staff-pool-v3-part-2-13e1d51c",
+      "hwl-agency-staff-pool-v3-part-3-23c4a980"
+    ],
+    "size_bytes": 1056640
+  },
+  "/Users/amritanshu/Desktop/AI Chat bot/troubleshooting-poc/HWL Agency_Assignment Agreement V4.pdf": {
+    "hash": "7c7e3ba32c6b6732cb018e1159525b9038be7d856675d560f06e1c97c586b517",
+    "extracted_at": "2026-02-24T13:47:24.592Z",
+    "chunk_ids": [
+      "hwl-agency-assignment-agreement-v4-6b1eae58",
+      "hwl-agency-assignment-agreement-v4-sign-approve-agreement-208f90e2",
+      "hwl-agency-assignment-agreement-v4-signature-option-descript-70e63645",
+      "hwl-agency-assignment-agreement-v4-update-assignment-agreeme-2b105a48",
+      "hwl-agency-assignment-agreement-v4-modify-agreement-start-or-67d9d1db",
+      "hwl-agency-assignment-agreement-v4-modify-candidate-availabi-d1758ba5",
+      "hwl-agency-assignment-agreement-v4-modify-candidate-availabi-045e6a23",
+      "hwl-agency-assignment-agreement-v4-contracts-pending-facilit-295e5389",
+      "hwl-agency-assignment-agreement-v4-add-agreement-note-6ba3f547",
+      "hwl-agency-assignment-agreement-v4-while-candidate-is-in-act-842b8626",
+      "hwl-agency-assignment-agreement-v4-while-candidate-is-on-ass-d1cf0608",
+      "hwl-agency-assignment-agreement-v4-modify-finalized-agreemen-56fcd484",
+      "hwl-agency-assignment-agreement-v4-modify-agreement-start-or-67d9d1db",
+      "hwl-agency-assignment-agreement-v4-modify-candidate-availabi-0395a8e5",
+      "hwl-agency-assignment-agreement-v4-modify-candidate-availabi-045e6a23",
+      "hwl-agency-assignment-agreement-v4-approve-review-facility-r-8235b8b3",
+      "hwl-agency-assignment-agreement-v4-signature-option-descript-70e63645"
+    ],
+    "size_bytes": 1756572
+  }
+}

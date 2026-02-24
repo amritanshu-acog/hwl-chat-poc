@@ -2,6 +2,20 @@ import { readFile, writeFile, mkdir, readdir, stat } from "fs/promises";
 import { join, resolve, extname, basename } from "path";
 import { extractChunksFromDocument } from "./llm-client.js";
 import type { GuideEntry, LLMChunkOutput } from "./schemas.js";
+import {
+  loadManifest,
+  saveManifest,
+  hashBuffer,
+  recordExtraction,
+  getChunkIdsForSource,
+} from "./scripts/source-manifest.js";
+import {
+  decodePdfToText,
+  segmentDocument,
+  logSegmentSummary,
+  type DocumentSegment,
+} from "./chunker.js";
+import { CONFIG } from "./config.js";
 
 // ─── Markdown chunk assembler ──────────────────────────────────────────────────
 // Converts a validated LLMChunkOutput into the canonical .md format defined
@@ -98,7 +112,7 @@ function assembleChunkMarkdown(chunk: LLMChunkOutput): string {
 
 // ─── Guide YAML helpers ────────────────────────────────────────────────────────
 
-const GUIDE_PATH = join(process.cwd(), "data", "guide.yaml");
+const GUIDE_PATH = CONFIG.paths.guide;
 
 async function loadGuide(): Promise<GuideEntry[]> {
   try {
@@ -132,7 +146,7 @@ async function loadGuide(): Promise<GuideEntry[]> {
         );
         const triggers = triggersSection?.[1]
           ? [...triggersSection[1].matchAll(/- "?(.+?)"?\s*$/gm)].map((m) =>
-              m[1].trim(),
+              m[1]!.trim(),
             )
           : [];
 
@@ -142,7 +156,8 @@ async function loadGuide(): Promise<GuideEntry[]> {
         );
         const related_chunks = relatedSection?.[1]
           ? [...relatedSection[1].matchAll(/- (.+?)\s*$/gm)].map((m) =>
-              m[1].trim(),
+              // Normalize: strip 'chunk_id:' prefixes (GAP-D1-05)
+              m[1]!.trim().replace(/^chunk_id:/i, ""),
             )
           : [];
 
@@ -217,12 +232,157 @@ async function saveGuide(entries: GuideEntry[]): Promise<void> {
   console.log(`\n📘 guide.yaml updated — ${entries.length} chunk(s)\n`);
 }
 
-// ─── Source readers ────────────────────────────────────────────────────────────
+// ─── Guide context-window size guard (GAP-D1-19) ─────────────────────────────
 
-async function readPdf(filePath: string): Promise<string> {
+const MAX_CHUNKS_BEFORE_WARNING = 80;
+const MAX_GUIDE_KB_BEFORE_WARNING = 50;
+
+async function checkContextWindowSize(
+  guidePath: string,
+  currentCount: number,
+): Promise<void> {
+  if (currentCount <= MAX_CHUNKS_BEFORE_WARNING) return;
+
+  let fileKb = 0;
+  try {
+    const info = await stat(guidePath);
+    fileKb = info.size / 1024;
+  } catch {
+    /* ignore */
+  }
+
+  if (
+    currentCount > MAX_CHUNKS_BEFORE_WARNING ||
+    fileKb > MAX_GUIDE_KB_BEFORE_WARNING
+  ) {
+    console.warn(`
+⚠️  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⚠️  CONTEXT WINDOW SIZE WARNING (GAP-D1-19)
+⚠️
+⚠️  Knowledge base now has ${currentCount} chunks (${fileKb.toFixed(1)} KB).
+⚠️  Retrieval sends the full guide.yaml to the LLM on every query.
+⚠️  At this scale, you risk exceeding the LLM context window.
+⚠️
+⚠️  Recommended: migrate to embedding-based retrieval (vector store).
+⚠️  See: https://sdk.vercel.ai/docs/ai-sdk-core/embeddings
+⚠️  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+`);
+  }
+}
+
+async function readPdf(
+  filePath: string,
+): Promise<{ base64: string; buf: Buffer }> {
   console.log(`📄 Reading PDF: ${filePath}`);
   const buf = await readFile(filePath);
-  return buf.toString("base64");
+  return { base64: buf.toString("base64"), buf };
+}
+
+// ─── Extraction strategies ────────────────────────────────────────────────────
+
+/**
+ * Fallback: original single-shot LLM extraction.
+ * Used when pdf-parse can't extract text (image-only PDFs).
+ * Non-deterministic — the LLM decides boundaries and IDs itself.
+ */
+async function fallbackExtract(
+  base64: string,
+  source: string,
+  extractionType: "procedure" | "qna" = "procedure",
+): Promise<LLMChunkOutput[]> {
+  const label = `⏱  LLM extraction (single-shot) [${basename(source)}]`;
+  console.time(label);
+  const chunks = await extractChunksFromDocument(
+    base64,
+    undefined,
+    extractionType,
+  );
+  console.timeEnd(label);
+  return chunks;
+}
+
+/**
+ * Deterministic segment-level extraction (GAP-D1-01).
+ *
+ * For each pre-bounded segment from segmentDocument():
+ *   1. Build a per-segment prompt containing the section text.
+ *   2. Call LLM with segment prompt + full PDF (for image context).
+ *   3. OVERRIDE the LLM's chunk_id with our stable deriveChunkId() ID.
+ *
+ * Result: same PDF → same segments → same IDs every time.
+ * LLM non-determinism only affects wording, not boundaries or IDs.
+ */
+async function extractFromSegments(
+  segments: DocumentSegment[],
+  base64: string,
+  source: string,
+  extractionType: "procedure" | "qna" = "procedure",
+): Promise<LLMChunkOutput[]> {
+  const { deriveChunkId } = await import("./chunker.js");
+  const allChunks: LLMChunkOutput[] = [];
+
+  console.log(
+    `\n📋 Extracting ${segments.length} segment(s) individually (${extractionType} mode)...\n`,
+  );
+
+  for (const seg of segments) {
+    const label = `⏱  segment [${seg.stableChunkId}]`;
+    console.time(label);
+
+    let segmentPrompt: string;
+
+    if (extractionType === "qna") {
+      segmentPrompt =
+        `You are extracting Q&A pairs/FAQs from a specific section of a PDF.\n\n` +
+        `SECTION HEADING: ${seg.headingPath.join(" › ")}\n` +
+        `SECTION PAGES: ${seg.pageRange.start}–${seg.pageRange.end}\n\n` +
+        `SECTION TEXT:\n${seg.content}\n\n---\n\n` +
+        `Extract ONLY valid Questions and Answers found in this section.\n` +
+        `Required fields for each Q&A chunk: chunk_id, topic, summary, triggers (the question), ` +
+        `has_conditions, escalation, related_chunks, status, context, response (the answer), image_descriptions.\n` +
+        `Return ONLY a raw JSON array. Start with [ and end with ]. No markdown fences.`;
+    } else {
+      segmentPrompt =
+        `You are extracting from a specific section of a PDF document.\n\n` +
+        `SECTION HEADING: ${seg.headingPath.join(" › ")}\n` +
+        `SECTION PAGES: ${seg.pageRange.start}–${seg.pageRange.end}\n\n` +
+        `SECTION TEXT:\n${seg.content}\n\n---\n\n` +
+        `Extract the knowledge in this section only. Produce a SINGLE chunk JSON object (not an array).\n` +
+        `Required fields: chunk_id, topic, summary, triggers, has_conditions, escalation, ` +
+        `related_chunks, status, context, response, escalation_detail, image_descriptions.\n` +
+        `Return ONLY valid JSON. No markdown fences. No explanation.`;
+    }
+
+    try {
+      const chunks = await extractChunksFromDocument(
+        base64,
+        segmentPrompt,
+        extractionType,
+      );
+      console.timeEnd(label);
+
+      for (const chunk of chunks) {
+        // Override LLM-generated ID with our deterministic content-hash ID
+        // Note: For QnA, if multiple Q&A's in one segment, we append a suffix
+        const baseStableId = deriveChunkId(seg.headingPath, chunk.topic);
+        const stableId =
+          chunks.length > 1
+            ? `${baseStableId}-${chunks.indexOf(chunk)}`
+            : baseStableId;
+
+        console.log(`  ✓ ${stableId}  (LLM suggested: ${chunk.chunk_id})`);
+        allChunks.push({ ...chunk, chunk_id: stableId });
+      }
+    } catch (err) {
+      console.timeEnd(label);
+      console.warn(
+        `  ⚠️  Segment "${seg.stableChunkId}" extraction failed:`,
+        err,
+      );
+    }
+  }
+
+  return allChunks;
 }
 
 // ─── Core extraction pipeline ──────────────────────────────────────────────────
@@ -230,19 +390,62 @@ async function readPdf(filePath: string): Promise<string> {
 async function extractSingle(
   source: string,
   outputDir: string,
-): Promise<number> {
-  const content = await readPdf(source);
-  console.log(`  ↳ PDF size: ${content.length} base64 chars\n`);
+  manifest: Awaited<ReturnType<typeof loadManifest>>,
+  extractionType: "procedure" | "qna" = "procedure",
+): Promise<{
+  saved: number;
+  newCount: number;
+  updatedCount: number;
+  chunkIds: string[];
+}> {
+  const { base64: content, buf } = await readPdf(source);
+  const currentHash = hashBuffer(buf);
 
-  const chunks = await extractChunksFromDocument(content);
+  console.log(`  ↳ PDF size: ${(buf.length / 1024).toFixed(1)} KB\n`);
+
+  // ── Step 1: Extract plain text for deterministic segmentation (GAP-D1-01) ────
+  let chunks: LLMChunkOutput[];
+
+  const pdfText = await decodePdfToText(content);
+
+  if (pdfText.length > CONFIG.extraction.minTextLengthForSegmentation) {
+    // Text layer available — use deterministic segment-per-LLM-call pipeline
+    const docTitle = basename(source).replace(/\.pdf$/i, "");
+    const segments = segmentDocument(pdfText, docTitle);
+    logSegmentSummary(segments);
+
+    if (segments.length === 0) {
+      console.log(
+        "  ⚠️  Segmenter produced 0 segments. Falling back to single-shot extraction.\n",
+      );
+      chunks = await fallbackExtract(content, source, extractionType);
+    } else {
+      chunks = await extractFromSegments(
+        segments,
+        content,
+        source,
+        extractionType,
+      );
+    }
+  } else {
+    // Image-only PDF: no text layer — fall back to single-shot LLM extraction
+    console.log(
+      "  ⚠️  No text layer found (image-only PDF?). Using single-shot LLM extraction.\n",
+    );
+    chunks = await fallbackExtract(content, source, extractionType);
+  }
 
   if (chunks.length === 0) {
     console.log("  ⚠️  No chunks extracted from this document.\n");
-    return 0;
+    return { saved: 0, newCount: 0, updatedCount: 0, chunkIds: [] };
   }
 
+  // ── Step 2: Save chunks and update guide ──────────────────────────────────────
   const guide = await loadGuide();
   let savedCount = 0;
+  let newCount = 0;
+  let updatedCount = 0;
+  const savedChunkIds: string[] = [];
 
   for (const chunk of chunks) {
     try {
@@ -250,11 +453,9 @@ async function extractSingle(
       const filePath = join(outputDir, fileName);
       const relPath = `data/chunks/${fileName}`;
 
-      // Assemble and write the .md chunk file
       const markdown = assembleChunkMarkdown(chunk);
       await writeFile(filePath, markdown, "utf-8");
 
-      // Upsert into guide index
       const existingIdx = guide.findIndex((e) => e.chunk_id === chunk.chunk_id);
       const entry: GuideEntry = {
         chunk_id: chunk.chunk_id,
@@ -271,26 +472,36 @@ async function extractSingle(
       if (existingIdx >= 0) {
         guide[existingIdx] = entry;
         console.log(`  ↻ Updated: ${fileName}`);
+        updatedCount++;
       } else {
         guide.push(entry);
         console.log(`  ✓ Created: ${fileName}`);
+        newCount++;
       }
 
-      console.log(`    Topic:   ${chunk.topic}`);
-      console.log(`    Summary: ${chunk.summary}`);
-      console.log(`    Triggers: ${chunk.triggers.length}`);
-      console.log(`    Images:  ${chunk.image_descriptions.length}`);
+      console.log(`    Topic:      ${chunk.topic}`);
+      console.log(`    Summary:    ${chunk.summary}`);
+      console.log(`    Triggers:   ${chunk.triggers.length}`);
+      console.log(`    Images:     ${chunk.image_descriptions.length}`);
       console.log(`    Conditions: ${chunk.has_conditions}`);
       console.log("");
 
       savedCount++;
+      savedChunkIds.push(chunk.chunk_id);
     } catch (error) {
       console.error(`  ✗ Failed to save chunk "${chunk.chunk_id}":`, error);
     }
   }
 
   await saveGuide(guide);
-  return savedCount;
+
+  // Context window size guard (GAP-D1-19)
+  await checkContextWindowSize(GUIDE_PATH, guide.length);
+
+  // Update source manifest (GAP-D1-14 / GAP-D1-17)
+  recordExtraction(manifest, source, currentHash, buf.length, savedChunkIds);
+
+  return { saved: savedCount, newCount, updatedCount, chunkIds: savedChunkIds };
 }
 
 // ─── Input resolution ──────────────────────────────────────────────────────────
@@ -329,7 +540,7 @@ async function resolveSources(args: string[]): Promise<string[]> {
   return sources;
 }
 
-// ─── CLI Entry Point ───────────────────────────────────────────────────────────
+// ─── CLI Entry Point ─────────────────────────────────────────────────────────
 
 async function main() {
   const args = process.argv.slice(2);
@@ -337,19 +548,31 @@ async function main() {
   if (args.length === 0) {
     console.log(`
 Usage:
-  bun run extract <source> [source2] ...
+  bun run extract [options] <source> [source2] ...
+
+Options:
+  --type=procedure  Extract standard procedures (default)
+  --type=qna        Extract Q&A pairs / FAQs
 
 Sources:
   • A single PDF file      bun run extract ./manual.pdf
   • Multiple PDFs          bun run extract a.pdf b.pdf
   • A directory (all PDFs) bun run extract ./docs/
-  • Mixed                  bun run extract ./docs/ extra.pdf
+  • Mixed                  bun run extract --type=qna faq.pdf
+
+Tip: For a full ingestion pipeline (extract → validate → relate → rebuild),
+     use: bun run ingest <sources>
 `);
     process.exit(1);
   }
 
+  const typeFlag = args.find((a) => a.startsWith("--type="));
+  const extractionType: "procedure" | "qna" =
+    typeFlag === "--type=qna" ? "qna" : "procedure";
+  const sourcesArgs = args.filter((a) => !a.startsWith("--type="));
+
   try {
-    const sources = await resolveSources(args);
+    const sources = await resolveSources(sourcesArgs);
 
     if (sources.length === 0) {
       console.error("❌ No valid PDF sources found.");
@@ -360,13 +583,18 @@ Sources:
       `\n🚀 Starting extraction for ${sources.length} source(s)...\n`,
     );
 
-    const outputDir = join(process.cwd(), "data", "chunks");
+    const outputDir = CONFIG.paths.chunks;
     await mkdir(outputDir, { recursive: true });
+    await mkdir(CONFIG.paths.data, { recursive: true });
 
-    // Ensure data dir exists for guide.yaml
-    await mkdir(join(process.cwd(), "data"), { recursive: true });
+    // ── Load source manifest (GAP-D1-14 / GAP-D1-17) ──────────────────────────
+    const manifest = await loadManifest();
 
-    let totalSaved = 0;
+    // ── Per-source extraction with summary tracking (GAP-D1-18) ──────────────
+    let totalNew = 0;
+    let totalUpdated = 0;
+    let totalFailed = 0;
+    const extractStart = Date.now();
 
     for (let i = 0; i < sources.length; i++) {
       const source = sources[i]!;
@@ -374,17 +602,47 @@ Sources:
       console.log(`\n━━━ [${i + 1}/${sources.length}] ${label} ━━━\n`);
 
       try {
-        const count = await extractSingle(source, outputDir);
-        totalSaved += count;
+        const result = await extractSingle(
+          source,
+          outputDir,
+          manifest,
+          extractionType,
+        );
+        totalNew += result.newCount;
+        totalUpdated += result.updatedCount;
       } catch (err) {
         console.error(`❌ Failed to extract from ${label}:`, err);
+        totalFailed++;
       }
     }
 
-    console.log(
-      `\n✅ Extraction complete — ${totalSaved} chunk(s) saved to ${outputDir}\n`,
-    );
-    console.log(`📘 Guide index: data/guide.yaml\n`);
+    // ── Save updated manifest (GAP-D1-17) ─────────────────────────────────────
+    await saveManifest(manifest);
+    console.log(`\n📋 source-manifest.json updated`);
+
+    // ── Extraction summary report (GAP-D1-18) ─────────────────────────────────
+    const totalElapsed = ((Date.now() - extractStart) / 1000).toFixed(1);
+    const totalSaved = totalNew + totalUpdated;
+
+    console.log(`
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📊 Extraction Summary
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   Sources processed : ${sources.length}
+   Chunks created    : ${totalNew}
+   Chunks updated    : ${totalUpdated}
+   Sources failed    : ${totalFailed}
+   Total time        : ${totalElapsed}s
+   Output directory  : ${outputDir}
+   Guide index       : data/guide.yaml
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Next steps:
+  1. Validate chunks:  bun run validate
+  2. Link related:     bun run relate
+  3. Rebuild index:    bun run rebuild
+  — or run all steps: bun run ingest <sources>
+`);
   } catch (error) {
     console.error("Extraction failed:", error);
     process.exit(1);

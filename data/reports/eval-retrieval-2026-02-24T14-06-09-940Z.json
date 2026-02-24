@@ -1,0 +1,67 @@
+{
+  "runAt": "2026-02-24T14:06:09.940Z",
+  "score": 100,
+  "passed": 5,
+  "failed": 0,
+  "results": [
+    {
+      "question": "How do I add a comment or additional information to an existing agreement?",
+      "expected": [
+        "hwl-agency-assignment-agreement-v4-add-agreement-note-6ba3f547"
+      ],
+      "retrieved": [
+        "hwl-agency-assignment-agreement-v4-add-agreement-note-6ba3f547",
+        "hwl-agency-assignment-agreement-v4-while-candidate-is-in-act-842b8626",
+        "hwl-agency-assignment-agreement-v4-while-candidate-is-on-ass-d1cf0608"
+      ],
+      "hit": true,
+      "notes": "User wants to document extra contract info via notes."
+    },
+    {
+      "question": "I need to extend the end date of an assignment agreement. How do I do that?",
+      "expected": [
+        "hwl-agency-assignment-agreement-v4-modify-agreement-start-or-67d9d1db"
+      ],
+      "retrieved": [
+        "hwl-agency-assignment-agreement-v4-modify-agreement-start-or-67d9d1db"
+      ],
+      "hit": true,
+      "notes": "User needs to change contract timeline dates."
+    },
+    {
+      "question": "What are the steps to respond to a facility's renegotiation request on an agreement?",
+      "expected": [
+        "hwl-agency-assignment-agreement-v4-approve-review-facility-r-8235b8b3"
+      ],
+      "retrieved": [
+        "hwl-agency-assignment-agreement-v4-approve-review-facility-r-8235b8b3",
+        "hwl-agency-assignment-agreement-v4-contracts-pending-facilit-295e5389"
+      ],
+      "hit": true,
+      "notes": "Focus on the agency signature and acceptance of facility updates."
+    },
+    {
+      "question": "How do I update the shift availability and agency rates for a Physician candidate?",
+      "expected": [
+        "hwl-agency-assignment-agreement-v4-modify-candidate-availabi-045e6a23"
+      ],
+      "retrieved": [
+        "hwl-agency-assignment-agreement-v4-modify-candidate-availabi-045e6a23"
+      ],
+      "hit": true,
+      "notes": "Targeted at AP/Physician specific availability and rate edits."
+    },
+    {
+      "question": "Where can I find instructions for signing a pending assignment agreement on the dashboard?",
+      "expected": [
+        "hwl-agency-assignment-agreement-v4-sign-approve-agreement-208f90e2"
+      ],
+      "retrieved": [
+        "hwl-agency-assignment-agreement-v4-sign-approve-agreement-208f90e2",
+        "hwl-agency-assignment-agreement-v4-signature-option-descript-70e63645"
+      ],
+      "hit": true,
+      "notes": "Standard approval process for new placement agreements."
+    }
+  ]
+}

@@ -1,12 +1,9 @@
 import { readFile } from "fs/promises";
-import { join, dirname } from "path";
-import { fileURLToPath } from "url";
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
+import { join } from "path";
+import { CONFIG } from "./config.js";
 
 /** Directory where prompt .md files are stored */
-const PROMPTS_DIR = join(__dirname, "prompts");
+const PROMPTS_DIR = CONFIG.paths.prompts;
 
 /** Cache loaded prompts in memory to avoid repeated file reads */
 const promptCache = new Map<string, string>();

@@ -1,6 +1,5 @@
 import { google } from "@ai-sdk/google";
 import { groq } from "@ai-sdk/groq";
-import { createOpenAI } from "@ai-sdk/openai";
 import { azure } from "@ai-sdk/azure";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
@@ -19,7 +18,6 @@ export interface ProviderConfig {
 }
 
 // ─── Provider Registry ─────────────────────────────────────────────────────────
-
 /**
  * Registry of all supported providers.
  * To add a new provider:

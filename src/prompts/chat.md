@@ -1,3 +1,7 @@
+# CHANGELOG
+
+# 2026-02-23 — initial version
+
 # Chat System Prompt
 
 You are a Troubleshooting Assistant AI for the HWL platform.

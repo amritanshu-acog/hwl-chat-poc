@@ -92,8 +92,16 @@ function renderResponse(parsed: ChatResponse | ChatResponse[]): void {
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
+const DEBUG_MODE = process.argv.includes("--debug");
+
 async function startChat() {
-  console.log("🔧 Troubleshooting Assistant - Interactive Mode\n");
+  console.log("\n🔧 HWL Troubleshooting Assistant");
+  if (DEBUG_MODE) {
+    console.log(
+      "🔍  Running in DEBUG MODE — retrieved chunks will be shown before each answer",
+    );
+  }
+  console.log("");
 
   // Confirm guide.yaml exists and show available processes
   let processCount = 0;
@@ -153,10 +161,34 @@ async function startChat() {
       console.log("\nAssistant:");
 
       try {
-        const { raw, parsed } = await answerTroubleshootingQuestion(
-          question,
-          conversationHistory,
-        );
+        const { raw, parsed, contextChunks } =
+          await answerTroubleshootingQuestion(question, conversationHistory);
+
+        // ── Debug view: show evidence chunks before the answer ──────────────────
+        if (DEBUG_MODE) {
+          console.log("\n" + "═".repeat(62));
+          console.log(
+            "🔍 [DEBUG] EVIDENCE: The AI is reading the following chunks",
+          );
+          console.log("═".repeat(62));
+          if (contextChunks.length === 0) {
+            console.log("⚠️  No relevant chunks found for this question.");
+          } else {
+            contextChunks.forEach((chunk, idx) => {
+              console.log(`\n📋 Chunk ${idx + 1} of ${contextChunks.length}`);
+              console.log(`   ID:      ${chunk.chunk_id}`);
+              console.log(`   Topic:   ${chunk.topic}`);
+              console.log(`   Summary: ${chunk.summary}`);
+              console.log("   " + "─".repeat(56));
+              // Show content preview (first 800 chars to keep it readable)
+              const preview = chunk.content.trim().slice(0, 800);
+              const truncated =
+                chunk.content.length > 800 ? "... [truncated]" : "";
+              console.log("   " + preview.replace(/\n/g, "\n   ") + truncated);
+            });
+          }
+          console.log("\n" + "═".repeat(62) + "\n");
+        }
 
         renderResponse(parsed);
 

@@ -6,14 +6,19 @@
   "scripts": {
     "extract": "bun src/extract.ts",
     "chat": "bun src/main.ts",
-    "test": "bun tests/evaluate.ts",
-    "build": "tsc",
-    "dev": "bun --watch src/main.ts",
-    "server": "bun run src/server.ts",
-    "rebuild": "bun src/scripts/rebuild-guide.ts",
-    "delete": "bun src/scripts/delete.ts",
+    "ingest": "bun src/scripts/ingest.ts",
     "validate": "bun src/scripts/validate.ts",
-    "relate": "bun src/scripts/relate.ts"
+    "validate-guide": "bun src/scripts/validate-guide.ts",
+    "relate": "bun src/scripts/relate.ts",
+    "rebuild": "bun src/scripts/rebuild-guide.ts",
+    "perf-report": "bun src/scripts/perf-report.ts",
+    "score": "bun src/scripts/eval-retrieval.ts",
+    "delete": "bun src/scripts/delete.ts",
+    "e2e-test": "bun src/scripts/e2e-test.ts",
+    "test": "bun src/scripts/e2e-test.ts",
+    "server": "bun run src/server.ts",
+    "dev": "bun --watch src/main.ts",
+    "build": "tsc"
   },
   "devDependencies": {
     "@types/bun": "latest",
@@ -26,14 +31,14 @@
     "typescript": "^5.9.3"
   },
   "dependencies": {
+    "@ai-sdk/azure": "^3.0.32",
     "@ai-sdk/google": "^3.0.29",
     "@ai-sdk/groq": "^3.0.24",
     "ai": "^6.0.86",
     "dotenv": "^17.3.1",
     "hono": "^4.11.9",
     "node-fetch": "^3.3.2",
-    "pdf-lib": "^1.17.1",
-    "pdfjs-dist": "^5.4.624",
+    "pdf-parse": "^2.4.5",
     "zod": "^4.3.6"
   }
 }

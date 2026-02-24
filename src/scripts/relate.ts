@@ -14,8 +14,9 @@ import { generateText } from "ai";
 import { getModel } from "../providers.js";
 import { cleanJson } from "../llm-client.js";
 import { execSync } from "child_process";
+import { CONFIG } from "../config.js";
 
-const CHUNKS_DIR = join(process.cwd(), "data", "chunks");
+const CHUNKS_DIR = CONFIG.paths.chunks;
 
 // ─── Model ─────────────────────────────────────────────────────────────────────
 
@@ -110,9 +111,12 @@ Example: ["chunk-id-one", "chunk-id-two"]`;
 // ─── Front matter updater ──────────────────────────────────────────────────────
 
 function updateRelatedChunks(raw: string, related: string[]): string {
+  // Normalise: strip any accidental 'chunk_id:' prefixes (GAP-D1-05)
+  const normalised = related.map((r) => r.trim().replace(/^chunk_id:/i, ""));
+
   const relatedBlock =
-    related.length > 0
-      ? `related_chunks:\n${related.map((r) => `  - ${r}`).join("\n")}`
+    normalised.length > 0
+      ? `related_chunks:\n${normalised.map((r) => `  - ${r}`).join("\n")}`
       : `related_chunks:`;
 
   // Replace existing related_chunks block

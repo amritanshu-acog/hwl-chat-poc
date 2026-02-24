@@ -12,23 +12,15 @@
 
 import { readFile, writeFile, readdir } from "fs/promises";
 import { join } from "path";
+import type { GuideEntry } from "../schemas.js"; // GAP-D1-07: single source of truth
+import { CONFIG } from "../config.js";
 
-const CHUNKS_DIR = join(process.cwd(), "data", "chunks");
-const GUIDE_PATH = join(process.cwd(), "data", "guide.yaml");
+const CHUNKS_DIR = CONFIG.paths.chunks;
+const GUIDE_PATH = CONFIG.paths.guide;
 
 // ─── Front matter extractor ────────────────────────────────────────────────────
 
-interface GuideEntry {
-  chunk_id: string;
-  topic: string;
-  summary: string;
-  triggers: string[];
-  has_conditions: boolean;
-  escalation: string | null;
-  related_chunks: string[];
-  status: "active" | "review" | "deprecated";
-  file: string;
-}
+// GuideEntry type is now imported from schemas.ts (GAP-D1-07 — no local duplicate)
 
 function extractFrontMatter(raw: string, fileName: string): GuideEntry | null {
   const fmMatch = raw.match(/^---\n([\s\S]*?)\n---/);
@@ -54,13 +46,16 @@ function extractFrontMatter(raw: string, fileName: string): GuideEntry | null {
   const triggersSection = fm.match(/^triggers:\s*\n((?:\s+- .+\n?)*)/m);
   const triggers = triggersSection?.[1]
     ? [...triggersSection[1].matchAll(/- "?(.+?)"?\s*$/gm)].map((m) =>
-        m[1].trim(),
+        m[1]!.trim(),
       )
     : [];
 
   const relatedSection = fm.match(/^related_chunks:\s*\n((?:\s+- .+\n?)*)/m);
   const related_chunks = relatedSection?.[1]
-    ? [...relatedSection[1].matchAll(/- (.+?)\s*$/gm)].map((m) => m[1].trim())
+    ? [...relatedSection[1].matchAll(/- (.+?)\s*$/gm)].map((m) =>
+        // Normalize: strip accidental 'chunk_id:' prefixes (GAP-D1-05)
+        m[1]!.trim().replace(/^chunk_id:/i, ""),
+      )
     : [];
 
   if (!chunk_id || !topic) {
@@ -142,13 +137,21 @@ async function main() {
   console.log(`📂 Found ${files.length} chunk file(s)\n`);
 
   const entries: GuideEntry[] = [];
+  let skippedTotal = 0;
 
   for (const file of files.sort()) {
     const raw = await readFile(join(CHUNKS_DIR, file), "utf-8");
     const entry = extractFrontMatter(raw, file);
     if (entry) {
+      if (entry.status !== "active") {
+        console.log(
+          `  ⏭️  Skipping ${file} [${entry.status}] — excluded from index`,
+        );
+        skippedTotal++;
+        continue;
+      }
       entries.push(entry);
-      console.log(`  ✓ ${file} → ${entry.chunk_id} [${entry.status}]`);
+      console.log(`  ✅ ${file} → ${entry.chunk_id} [${entry.status}]`);
     }
   }
 

@@ -1,0 +1,35 @@
+{
+  "startedAt": "2026-02-24T13:36:35.665Z",
+  "sources": [
+    "/Users/amritanshu/Desktop/AI Chat bot/troubleshooting-poc/HWL Agency_Assignment Agreement V4.pdf"
+  ],
+  "steps": [
+    {
+      "step": "extract",
+      "success": true,
+      "durationMs": 648959,
+      "output": ""
+    },
+    {
+      "step": "validate",
+      "success": true,
+      "durationMs": 42541,
+      "output": ""
+    },
+    {
+      "step": "relate",
+      "success": true,
+      "durationMs": 36442,
+      "output": ""
+    },
+    {
+      "step": "rebuild",
+      "success": true,
+      "durationMs": 86,
+      "output": ""
+    }
+  ],
+  "chunksInKB": 13,
+  "totalDurationMs": 728037,
+  "success": true
+}

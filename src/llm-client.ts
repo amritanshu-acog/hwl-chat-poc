@@ -6,6 +6,7 @@ import { ZodError } from "zod";
 import type { ChatResponse, LLMChunkOutput } from "./schemas.js";
 import { readFile } from "fs/promises";
 import { join } from "path";
+import { CONFIG } from "./config.js";
 
 // ─── Lazy-initialised model ────────────────────────────────────────────────────
 
@@ -21,9 +22,9 @@ function model() {
 const GUIDE_PATH = join(process.cwd(), "data", "guide.yaml");
 let _guideCache: string | null = null;
 
-async function loadGuide(): Promise<string> {
+export async function loadGuide(): Promise<string> {
   if (_guideCache) return _guideCache;
-  _guideCache = await readFile(GUIDE_PATH, "utf-8");
+  _guideCache = await readFile(CONFIG.paths.guide, "utf-8");
   return _guideCache;
 }
 
@@ -34,6 +35,8 @@ export function clearGuideCache(): void {
 // ─── Chunk loader ──────────────────────────────────────────────────────────────
 
 async function loadChunk(filePath: string): Promise<string> {
+  // filePath from guide.yaml is relative, e.g. "data/chunks/foo.md"
+  // Resolve it against the project root (process.cwd())
   const fullPath = join(process.cwd(), filePath);
   return readFile(fullPath, "utf-8");
 }
@@ -92,6 +95,8 @@ export function cleanJson(raw: string): string {
 
 export async function extractChunksFromDocument(
   pdfBase64: string,
+  overridePrompt?: string,
+  extractionType: "procedure" | "qna" = "procedure",
 ): Promise<LLMChunkOutput[]> {
   if (!pdfBase64 || pdfBase64.trim().length === 0) {
     console.error(
@@ -100,11 +105,15 @@ export async function extractChunksFromDocument(
     return [];
   }
 
-  console.log("📤 Sending PDF to LLM for chunk extraction...\n");
+  console.log(`📤 Sending PDF to LLM for ${extractionType} extraction...\n`);
 
-  const systemPrompt = await loadPrompt("extraction");
+  const systemPrompt = await loadPrompt(
+    extractionType === "qna" ? "qna-extraction" : "extraction",
+  );
 
-  const userMessage = `Read every page of this PDF carefully and thoroughly.
+  const userMessage =
+    overridePrompt ??
+    `Read every page of this PDF carefully and thoroughly.
 
 Your task:
 1. Identify ALL distinct processes, procedures, troubleshooting flows, and how-to guides.
@@ -143,10 +152,6 @@ Return ONLY a raw JSON array. Start with [ and end with ]. No markdown fences. N
     console.error("❌ LLM call failed during extraction:", error);
     throw error;
   }
-
-  console.log("\n🔎 Raw LLM extraction output (first 1000 chars):");
-  console.log(text.substring(0, 1000));
-  console.log("...\n");
 
   const cleaned = cleanJson(text);
 
@@ -240,10 +245,13 @@ USER QUESTION: ${question}
 Return ONLY a JSON array of chunk_id strings, nothing else. Example: ["chunk-id-1", "chunk-id-2"]
 If no chunks are relevant, return: []`;
 
+  // Perf timing: retrieval LLM call (GAP-D1-16)
+  console.time("⏱  Step 1 — retrieval");
   const { text } = await generateText({
     model: model(),
     prompt: retrievalPrompt,
   });
+  console.timeEnd("⏱  Step 1 — retrieval");
 
   try {
     const clean = cleanJson(text);
@@ -293,9 +301,17 @@ export function parseChatResponse(raw: string): ChatResponse | ChatResponse[] {
 
 // ─── Step 2: Generation ────────────────────────────────────────────────────────
 
+export type ContextChunk = {
+  chunk_id: string;
+  topic: string;
+  summary: string;
+  content: string;
+};
+
 export type ChatResult = {
   raw: string;
   parsed: ChatResponse | ChatResponse[];
+  contextChunks: ContextChunk[];
 };
 
 export async function answerTroubleshootingQuestion(
@@ -316,6 +332,7 @@ export async function answerTroubleshootingQuestion(
   // ── Load chunk files ─────────────────────────────────────────────────────────
   const guide = await loadGuide();
   const chunkContents: string[] = [];
+  const contextChunks: ContextChunk[] = [];
 
   if (chunkIds.length > 0) {
     const blocks = guide.split(/^\s{2}- chunk_id:/m).filter((b) => b.trim());
@@ -324,10 +341,15 @@ export async function answerTroubleshootingQuestion(
       const chunk_id = block.match(/^\s*([^\n]+)/)?.[1]?.trim() ?? "";
       if (chunkIds.includes(chunk_id)) {
         const file = block.match(/\n\s+file:\s*(.+)/)?.[1]?.trim();
+        const topic =
+          block.match(/\n\s+topic:\s*(.+)/)?.[1]?.trim() ?? "Unknown";
+        const summary =
+          block.match(/summary:\s*>\s*\n\s+(.+)/)?.[1]?.trim() ?? "No summary";
         if (file) {
           try {
             const content = await loadChunk(file);
             chunkContents.push(`=== Chunk: ${chunk_id} ===\n${content}`);
+            contextChunks.push({ chunk_id, topic, summary, content });
             console.log(`📦 Loaded chunk: ${chunk_id}`);
           } catch {
             console.warn(`⚠️  Could not load chunk file: ${file}`);
@@ -355,15 +377,18 @@ export async function answerTroubleshootingQuestion(
     `📦 Step 2 — Generating response with ${chunkContents.length} chunk(s) in ${mode} mode...\n`,
   );
 
+  // Perf timing: generation LLM call (GAP-D1-16)
+  console.time("⏱  Step 2 — generation");
   const { text } = await generateText({
     model: model(),
     system: systemPrompt + contextBlock + modeBlock,
     messages: [...conversationHistory, { role: "user", content: question }],
   });
+  console.timeEnd("⏱  Step 2 — generation");
 
   console.log("🔎 Raw chat LLM output:", text.substring(0, 1000));
 
   const parsed = parseChatResponse(text);
 
-  return { raw: text, parsed };
+  return { raw: text, parsed, contextChunks };
 }
