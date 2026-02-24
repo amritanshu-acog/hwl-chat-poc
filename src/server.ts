@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { readFile, appendFile, mkdir } from "fs/promises";
-import { join } from "path";
+import { join, basename } from "path";
 import { answerTroubleshootingQuestion } from "./llm-client.js";
 
 // ─── Types ──────────────────────────────────────────────────────────────────────
@@ -65,6 +65,24 @@ try {
 }
 console.log("🌐 Listening on http://localhost:3000");
 console.log(`📝 Logging to ${LOG_PATH}\n`);
+
+// ─── Load Manifest Map ────────────────────────────────────────────────────────
+const manifestMap = new Map<string, string>();
+try {
+  const manifestData = JSON.parse(
+    await readFile(join(process.cwd(), "source-manifest.json"), "utf-8"),
+  );
+  for (const [pdfPath, info] of Object.entries(manifestData)) {
+    const pdfName = basename(pdfPath);
+    for (const chunk_id of (info as any).chunk_ids) {
+      manifestMap.set(chunk_id, pdfName);
+    }
+  }
+} catch {
+  console.warn(
+    "⚠️  source-manifest.json not found. Source file mappings may not be available.",
+  );
+}
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -165,7 +183,7 @@ app.post("/api/chat", async (c) => {
     pruneStale();
     const session = getSession(sessionId);
 
-    const { raw, parsed } = await answerTroubleshootingQuestion(
+    const { raw, parsed, contextChunks } = await answerTroubleshootingQuestion(
       message,
       session.messages,
       mode,
@@ -191,7 +209,19 @@ app.post("/api/chat", async (c) => {
       durationMs: Date.now() - startTime,
     });
 
-    return c.json(parsed);
+    return c.json({
+      response: parsed,
+      contextChunks: contextChunks.map((chunk) => {
+        const sourcePdf = manifestMap.get(chunk.chunk_id);
+        return {
+          chunk_id: chunk.chunk_id,
+          topic: chunk.topic,
+          summary: chunk.summary,
+          // Use original PDF name if available, fallback to chunk filename
+          file: sourcePdf || chunk.file.replace(/^data\/chunks\//, ""),
+        };
+      }),
+    });
   } catch (err) {
     console.error("[/api/chat] Error:", err);
     return c.json({ error: "Internal server error" }, 500);

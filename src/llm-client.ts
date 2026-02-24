@@ -306,6 +306,7 @@ export type ContextChunk = {
   topic: string;
   summary: string;
   content: string;
+  file: string;
 };
 
 export type ChatResult = {
@@ -349,7 +350,7 @@ export async function answerTroubleshootingQuestion(
           try {
             const content = await loadChunk(file);
             chunkContents.push(`=== Chunk: ${chunk_id} ===\n${content}`);
-            contextChunks.push({ chunk_id, topic, summary, content });
+            contextChunks.push({ chunk_id, topic, summary, content, file });
             console.log(`📦 Loaded chunk: ${chunk_id}`);
           } catch {
             console.warn(`⚠️  Could not load chunk file: ${file}`);
