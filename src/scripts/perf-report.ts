@@ -30,7 +30,9 @@ async function main() {
 
   let files: string[];
   try {
-    files = (await readdir(reportsDir)).filter((f) => f.endsWith(".json"));
+    files = (await readdir(reportsDir)).filter(
+      (f) => f.startsWith("ingest-") && f.endsWith(".json"),
+    );
   } catch {
     console.error("❌ No reports found. Run bun run ingest first.");
     return;
