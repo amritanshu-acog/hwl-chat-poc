@@ -238,3 +238,33 @@ chunks:
       - hwl-agency-assignment-agreement-v4-add-agreement-note-6ba3f547
     status: active
     file: data/chunks/hwl-agency-assignment-agreement-v4-while-candidate-is-on-ass-d1cf0608.md
+
+  - chunk_id: hwl-agency-update-email-preferences-v2-default-selection-e895c844
+    topic: Default Email Notification Selection
+    summary: >
+      Explains how to enable the default setting for receiving all email notifications in HWL.
+    triggers:
+      - "set default email preferences"
+      - "subscribe to all notifications"
+      - "enable default email notifications"
+      - "default email selection in HWL"
+      - "add default email preferences HWL"
+    has_conditions: false
+    escalation: null
+    related_chunks:
+    status: active
+    file: data/chunks/hwl-agency-update-email-preferences-v2-default-selection-e895c844.md
+
+  - chunk_id: hwl-agency-update-email-preferences-v2-manual-selection-7c2790fa
+    topic: Manual Selection for Email Preferences
+    summary: >
+      Explains how to customize email notifications by manually selecting preferences for job titles and email notices in the HWL system.
+    triggers:
+      - "how to update email preferences in HWL"
+      - "customize job title notifications HWL"
+      - "choose email preferences manually in HWL"
+    has_conditions: false
+    escalation: null
+    related_chunks:
+    status: active
+    file: data/chunks/hwl-agency-update-email-preferences-v2-manual-selection-7c2790fa.md

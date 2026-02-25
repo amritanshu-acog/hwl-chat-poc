@@ -1,23 +1,13 @@
 {
   "/Users/amritanshu/Desktop/AI Chat bot/troubleshooting-poc/HWL Agency_Update Email Preferences V2.pdf": {
     "hash": "47a88b83c0b5ce01b27c865597267d928550796917b28d6cdadc017e30b5c9f2",
-    "extracted_at": "2026-02-24T11:42:33.961Z",
+    "extracted_at": "2026-02-25T04:28:47.362Z",
     "chunk_ids": [
       "hwl-agency-update-email-preferences-v2-update-email-preferen-64be7acd",
-      "hwl-agency-update-email-preferences-v2-manual-selection-f3bc2eff",
-      "hwl-agency-update-email-preferences-v2-default-selection-9c32fbe5"
+      "hwl-agency-update-email-preferences-v2-manual-selection-7c2790fa",
+      "hwl-agency-update-email-preferences-v2-default-selection-e895c844"
     ],
     "size_bytes": 230530
-  },
-  "/Users/amritanshu/Desktop/AI Chat bot/troubleshooting-poc/HWL Agency_Staff Pool V3.pdf": {
-    "hash": "7c5a73bd28476a0e235edf8c1314acf41a9579a5b1aba08718d6ac2b443803cc",
-    "extracted_at": "2026-02-24T10:48:29.983Z",
-    "chunk_ids": [
-      "hwl-agency-staff-pool-v3-part-1-918b5352",
-      "hwl-agency-staff-pool-v3-part-2-13e1d51c",
-      "hwl-agency-staff-pool-v3-part-3-23c4a980"
-    ],
-    "size_bytes": 1056640
   },
   "/Users/amritanshu/Desktop/AI Chat bot/troubleshooting-poc/HWL Agency_Assignment Agreement V4.pdf": {
     "hash": "7c7e3ba32c6b6732cb018e1159525b9038be7d856675d560f06e1c97c586b517",

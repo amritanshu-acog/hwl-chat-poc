@@ -31,6 +31,7 @@ troubleshooting-poc/
 │
 ├── data/
 │   ├── guide.yaml          ← The index. Lists every chunk: topic, summary, triggers, file path.
+│   ├── test-queries.json   ← "Gold Standard" test queries and expected chunks for evaluation
 │   └── chunks/             ← One .md file per knowledge chunk. This is the actual knowledge.
 │       ├── timecard-invoices-process.md
 │       ├── email-notification-preferences.md
@@ -59,11 +60,9 @@ troubleshooting-poc/
 │       ├── validate-guide.ts ← NEW: Verify guide.yaml structure with Zod
 │       ├── perf-report.ts  ← NEW: Analyzes and calculates metrics from ingestion reports
 │       ├── e2e-test.ts     ← NEW: Structural tests (no LLM, runs in seconds)
+│       ├── eval-retrieval.ts  ← NEW: Retrieval accuracy evaluation script (runs test queries)
 │       ├── source-manifest.ts ← NEW: Track which PDF produced which chunks
 │       └── delete.ts       ← Remove a chunk from the KB
-│
-├── test-corpus/
-│   └── manifest.json       ← NEW: Test corpus definition for regression testing
 │
 ├── source-manifest.json    ← NEW: Created at runtime. Maps PDF → chunk_ids + hash
 ├── package.json            ← All runnable commands are here
@@ -438,11 +437,16 @@ curl -X POST http://localhost:3000/api/chat \
 
 **What it does:** Interactive terminal chat. Type questions, get answers. No server needed.
 
+**Flags:**
+
+- `--debug`: Activates "Developer Mode". Before rendering the final answer, it prints out the precise `chunk_id`s, `topic`s, and chunk contents that the AI successfully retrieved during its search phase. Critical for debugging retrieval failures.
+
 ```bash
 bun run chat
+bun run chat --debug
 ```
 
-**Expected output:**
+**Expected output (Standard):**
 
 ```
 💬 HWL Assistant — type your question (or 'exit')
@@ -451,6 +455,24 @@ You: How do I reset my password?
 Assistant: [structured answer from knowledge base]
 
 You: exit
+```
+
+**Expected output (with `--debug` flag):**
+
+```
+You: How do I reset my password?
+Assistant:
+🔍 Calling LLM...
+🔍 Step 1 — Retrieval: finding relevant chunks from guide...
+
+══════════════════════════════════════════════════════════════
+🔍 [DEBUG] EVIDENCE: The AI is reading the following chunks
+══════════════════════════════════════════════════════════════
+
+📋 Chunk 1 of 2
+   ID:      hwl-agency-password-reset
+   Topic:   Password Reset Procedure
+   ...
 ```
 
 ---
@@ -469,6 +491,26 @@ bun run delete timecard-invoices-process
 🗑️  Deleting chunk: timecard-invoices-process
   ✅ Removed: data/chunks/timecard-invoices-process.md
   ✅ Removed from guide.yaml
+```
+
+---
+
+### 12. `bun run score`
+
+**What it does:** Runs the automated retrieval accuracy evaluation script (`eval-retrieval.ts`). It loads the "Gold Standard" list of test questions from `data/test-queries.json` and checks if the AI's retrieval engine successfully pulls the expected chunk ID for every question.
+
+**When to use:** Crucial for regression testing. Run this before client demos or whenever you drastically alter the chunk triggers/summaries to ensure you aren't hurting overall search accuracy.
+
+```bash
+bun run score
+```
+
+**Expected output:**
+
+```
+📊 Retrieval Accuracy Score: 100% (5/5)
+
+Full details saved to: data/reports/eval-report-2026-02-24T...
 ```
 
 ---
@@ -498,8 +540,9 @@ Everything below is **new** — it did not exist before:
 | `src/scripts/validate-guide.ts`  | `bun run validate-guide` — fast Zod check on guide.yaml                                                                            |
 | `src/scripts/e2e-test.ts`        | `bun run e2e-test` — 172 structural checks, no LLM, runs in seconds                                                                |
 | `src/scripts/source-manifest.ts` | Tracks which PDF produced which chunks (for deduplication and provenance)                                                          |
+| `src/scripts/eval-retrieval.ts`  | Automates testing against `data/test-queries.json` to prove retrieval accuracy on the Pilot dataset                                |
 | `src/prompts/qna-extraction.md`  | Extraction prompt for FAQ/Q&A format documents                                                                                     |
-| `test-corpus/manifest.json`      | Test corpus definition for regression testing                                                                                      |
+| `data/test-queries.json`         | "Gold Standard" test queries and expected chunks for evaluating accuracy                                                           |
 | `HELP.md`                        | This file                                                                                                                          |
 
 **Modified existing files:**

@@ -8,6 +8,7 @@ dist
 
 # Generated data - don't commit extracted processes
 data/chunks/
+data/debug-chunks/
 
 # code coverage
 coverage

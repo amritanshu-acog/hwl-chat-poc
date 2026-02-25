@@ -11,6 +11,7 @@
     "validate-guide": "bun src/scripts/validate-guide.ts",
     "relate": "bun src/scripts/relate.ts",
     "rebuild": "bun src/scripts/rebuild-guide.ts",
+    "chunk": "bun src/scripts/chunk-debug.ts",
     "perf-report": "bun src/scripts/perf-report.ts",
     "score": "bun src/scripts/eval-retrieval.ts",
     "delete": "bun src/scripts/delete.ts",
