@@ -17,7 +17,7 @@ An LLM-powered helpdesk assistant that extracts knowledge from PDFs and determin
 
 ## 💻 Core Commands
 
-- `bun run ingest <path>` — The full pipeline: extracts, validates, relates, and rebuilds the index.
+- `bun run ingest [--type=qna] <path>` — The full pipeline: extracts, validates, relates, and rebuilds the index. (Use `--type=qna` for FAQ-style documents).
 - `bun run server` — Runs the HTTP API server.
 - `bun run chat [--debug]` — CLI chat (use `--debug` to see the exact evidence chunks the AI read).
 - `bun run score` — Evaluates retrieval accuracy against `data/test-queries.json`.

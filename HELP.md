@@ -79,8 +79,13 @@ troubleshooting-poc/
 **What it does:** Full pipeline in one command. Runs all 4 steps below in order.
 **When to use:** Every time you add new PDFs to the knowledge base.
 
+**Flags:**
+
+- `--type=qna`: If the PDF you are ingesting is an FAQ layout instead of a User Manual, pass this flag so it alters the underlying prompt for better extraction quality.
+
 ```bash
 bun run ingest ./my-manual.pdf
+bun run ingest --type=qna ./faq.pdf # Use for Q&A documents
 bun run ingest ./docs/             # all PDFs in a folder
 bun run ingest a.pdf b.pdf         # multiple files
 ```

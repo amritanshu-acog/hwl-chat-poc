@@ -137,13 +137,14 @@ async function main(): Promise<void> {
   if (args.length === 0) {
     console.log(`
 Usage:
-  bun run ingest <source> [source2] ...
+  bun run ingest [--type=qna] <source> [source2] ...
 
-Sources:
+Sources & Flags:
+  • --type=qna               Use specialized Q&A extraction prompt for FAQ docs
   • Single PDF file:         bun run ingest ./manual.pdf
   • Multiple PDFs:           bun run ingest a.pdf b.pdf
   • Whole directory:         bun run ingest ./docs/
-  • Mixed:                   bun run ingest ./docs/ extra.pdf
+  • Mixed:                   bun run ingest --type=qna ./docs/ extra.pdf
 
 What this does (in order):
   1. extract  — PDF → chunk .md files + guide.yaml
@@ -156,7 +157,10 @@ What this does (in order):
 
   banner("🚀 HWL Knowledge Base — Ingestion Orchestrator");
 
-  const sources = await resolveSources(args);
+  const paths = args.filter((a) => !a.startsWith("--"));
+  const flags = args.filter((a) => a.startsWith("--"));
+
+  const sources = await resolveSources(paths);
   if (sources.length === 0) {
     console.error("❌ No valid PDF sources found. Aborting.");
     process.exit(1);
@@ -175,6 +179,7 @@ What this does (in order):
   const extractResult = runStep("extract", "bun", [
     "run",
     "extract",
+    ...flags,
     ...sources,
   ]);
   steps.push(extractResult);
