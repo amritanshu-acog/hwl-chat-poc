@@ -9,12 +9,16 @@ dist
 # Generated data - don't commit extracted processes
 data/chunks/
 data/debug-chunks/
+source-manifest.json
+data/guide.yaml
 
 # code coverage
 coverage
 *.lcov
 
 # logs
+data/reports/
+temp/
 logs
 _.log
 report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
