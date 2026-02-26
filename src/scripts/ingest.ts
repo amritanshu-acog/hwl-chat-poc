@@ -17,6 +17,7 @@ import { resolve, extname, basename } from "path";
 import { stat, readdir, readFile, writeFile, mkdir } from "fs/promises";
 import { join } from "path";
 import { CONFIG } from "../config.js";
+import { logger } from "../logger.js";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -40,15 +41,11 @@ interface IngestReport {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function banner(text: string): void {
-  const line = "━".repeat(60);
-  console.log(`\n${line}`);
-  console.log(`  ${text}`);
-  console.log(`${line}\n`);
+  logger.info(text);
 }
 
 function stepHeader(step: string, index: number, total: number): void {
-  console.log(`\n[${index}/${total}] ${step}`);
-  console.log("─".repeat(50));
+  logger.info(`Step [${index}/${total}]: ${step}`);
 }
 
 /**
@@ -103,7 +100,7 @@ async function resolveSources(args: string[]): Promise<string[]> {
     try {
       info = await stat(resolved);
     } catch {
-      console.warn(`⚠️  Path not found: ${arg}`);
+      logger.warn("Path not found", { path: arg });
       continue;
     }
 
@@ -115,12 +112,12 @@ async function resolveSources(args: string[]): Promise<string[]> {
         .map((f) => join(resolved, f));
 
       if (pdfs.length === 0) {
-        console.warn(`⚠️  No PDFs found in: ${resolved}`);
+        logger.warn("No PDFs found in directory", { directory: resolved });
       }
       sources.push(...pdfs);
     } else if (info.isFile()) {
       if (extname(resolved).toLowerCase() !== ".pdf") {
-        console.warn(`⚠️  Skipping non-PDF: ${arg}`);
+        logger.warn("Skipping non-PDF file", { path: arg });
       } else {
         sources.push(resolved);
       }
@@ -137,14 +134,23 @@ async function main(): Promise<void> {
   if (args.length === 0) {
     console.log(`
 Usage:
-  bun run ingest [--type=qna] <source> [source2] ...
+  bun run ingest [--type=<type>] <source> [source2] ...
 
-Sources & Flags:
-  • --type=qna               Use specialized Q&A extraction prompt for FAQ docs
-  • Single PDF file:         bun run ingest ./manual.pdf
-  • Multiple PDFs:           bun run ingest a.pdf b.pdf
-  • Whole directory:         bun run ingest ./docs/
-  • Mixed:                   bun run ingest --type=qna ./docs/ extra.pdf
+Extraction Types:
+  --type=procedure  (default) Step-by-step how-to guides and workflows
+  --type=qna        FAQ / Q&A documents
+  --type=chat       ⚠️  FUTURE — HubSpot chat conversation exports (stub only)
+
+Recommended Input Directories:
+  ./docs/procedure/   Drop procedure PDFs here → bun run ingest --type=procedure ./docs/procedure/
+  ./docs/qna/         Drop FAQ PDFs here       → bun run ingest --type=qna ./docs/qna/
+  ./docs/chat/        Drop chat exports here   → bun run ingest --type=chat ./docs/chat/  (future)
+
+Sources:
+  • Single PDF file:  bun run ingest ./manual.pdf
+  • Multiple PDFs:    bun run ingest a.pdf b.pdf
+  • Whole directory:  bun run ingest ./docs/procedure/
+  • Mixed:           bun run ingest --type=qna faq.pdf extra.pdf
 
 What this does (in order):
   1. extract  — PDF → chunk .md files + guide.yaml
@@ -155,20 +161,28 @@ What this does (in order):
     process.exit(1);
   }
 
-  banner("🚀 HWL Knowledge Base — Ingestion Orchestrator");
+  const flags: string[] = [];
+  const sourceArgs: string[] = [];
+  for (const arg of args) {
+    if (arg.startsWith("--")) {
+      flags.push(arg);
+    } else {
+      sourceArgs.push(arg);
+    }
+  }
 
-  const paths = args.filter((a) => !a.startsWith("--"));
-  const flags = args.filter((a) => a.startsWith("--"));
+  const sources = await resolveSources(sourceArgs);
 
-  const sources = await resolveSources(paths);
   if (sources.length === 0) {
-    console.error("❌ No valid PDF sources found. Aborting.");
+    logger.error("No valid PDF sources found. Aborting.");
     process.exit(1);
   }
 
-  console.log("📋 Sources queued for ingestion:");
-  sources.forEach((s) => console.log(`   • ${basename(s)}`));
-  console.log(`\n   Total: ${sources.length} PDF(s)\n`);
+  logger.info("Ingestion orchestrator started");
+  logger.info("Sources queued for ingestion", {
+    sources: sources.map((s) => basename(s)),
+    total: sources.length,
+  });
 
   const startedAt = new Date().toISOString();
   const totalStart = Date.now();
@@ -185,8 +199,8 @@ What this does (in order):
   steps.push(extractResult);
 
   if (!extractResult.success) {
-    console.error("❌ Extraction failed:\n", extractResult.error);
-    console.error(
+    logger.error("❌ Extraction failed:\n", extractResult.error);
+    logger.error(
       "\n⛔ Aborting pipeline — no point validating failed extraction.",
     );
     printReport({
@@ -199,7 +213,7 @@ What this does (in order):
     });
     process.exit(1);
   }
-  console.log(`✅ Extract complete (${extractResult.durationMs}ms)`);
+  logger.info(`✅ Extract complete (${extractResult.durationMs}ms)`);
 
   // ── Step 2: Validate ────────────────────────────────────────────────────────
   stepHeader("Validate — Zod structural + LLM quality gates", 2, 4);
@@ -207,15 +221,15 @@ What this does (in order):
   steps.push(validateResult);
 
   if (!validateResult.success) {
-    console.warn(
+    logger.warn(
       "⚠️  Validation step encountered errors:\n",
       validateResult.error,
     );
-    console.warn(
+    logger.warn(
       "   Continuing pipeline — failed chunks are marked 'review' and excluded from retrieval.",
     );
   } else {
-    console.log(`✅ Validate complete (${validateResult.durationMs}ms)`);
+    logger.info(`✅ Validate complete (${validateResult.durationMs}ms)`);
   }
 
   // ── Step 3: Relate ──────────────────────────────────────────────────────────
@@ -224,10 +238,10 @@ What this does (in order):
   steps.push(relateResult);
 
   if (!relateResult.success) {
-    console.warn("⚠️  Relate step failed:\n", relateResult.error);
-    console.warn("   Continuing — related_chunks may be empty for new chunks.");
+    logger.warn("⚠️  Relate step failed:\n", relateResult.error);
+    logger.warn("   Continuing — related_chunks may be empty for new chunks.");
   } else {
-    console.log(`✅ Relate complete (${relateResult.durationMs}ms)`);
+    logger.info(`✅ Relate complete (${relateResult.durationMs}ms)`);
   }
 
   // ── Step 4: Rebuild ─────────────────────────────────────────────────────────
@@ -236,7 +250,7 @@ What this does (in order):
   steps.push(rebuildResult);
 
   if (!rebuildResult.success) {
-    console.error("❌ Rebuild failed:\n", rebuildResult.error);
+    logger.error("❌ Rebuild failed:\n", rebuildResult.error);
     // Rebuild failure is critical — guide.yaml may be stale
     printReport({
       startedAt,
@@ -248,7 +262,7 @@ What this does (in order):
     });
     process.exit(1);
   }
-  console.log(`✅ Rebuild complete (${rebuildResult.durationMs}ms)`);
+  logger.info(`✅ Rebuild complete (${rebuildResult.durationMs}ms)`);
 
   // ── Final report ────────────────────────────────────────────────────────────
   const chunksInKB = await countActiveChunks();
@@ -270,9 +284,9 @@ What this does (in order):
     const timestamp = startedAt.replace(/[:.]/g, "-");
     const reportPath = join(reportsDir, `ingest-${timestamp}.json`);
     await writeFile(reportPath, JSON.stringify(report, null, 2), "utf-8");
-    console.log(`📝 Structured report saved: ${reportPath}`);
+    logger.info(`📝 Structured report saved: ${reportPath}`);
   } catch (err) {
-    console.error("⚠️  Failed to save structured report:", err);
+    logger.error("⚠️  Failed to save structured report:", err);
   }
 
   process.exit(report.success ? 0 : 1);
@@ -287,40 +301,42 @@ function printReport(report: IngestReport): void {
       : "⚠️  Ingestion Completed with Errors",
   );
 
-  console.log(`  Started at:    ${report.startedAt}`);
-  console.log(
+  logger.info(`  Started at:    ${report.startedAt}`);
+  logger.info(
     `  Total time:    ${(report.totalDurationMs / 1000).toFixed(1)}s`,
   );
-  console.log(`  Sources:       ${report.sources.length} PDF(s)`);
-  console.log(`  Active chunks: ${report.chunksInKB}`);
-  console.log("");
+  logger.info(`  Sources:       ${report.sources.length} PDF(s)`);
+  logger.info(`  Active chunks: ${report.chunksInKB}`);
+  logger.info("");
 
-  console.log("  Step Results:");
+  logger.info("  Step Results:");
   const maxLabel = Math.max(...report.steps.map((s) => s.step.length));
   for (const step of report.steps) {
     const icon = step.success ? "✅" : "❌";
     const pad = " ".repeat(maxLabel - step.step.length);
-    console.log(
+    logger.info(
       `    ${icon} ${step.step}${pad}  ${(step.durationMs / 1000).toFixed(1)}s`,
     );
     if (!step.success && step.error) {
       const preview = step.error.trim().split("\n")[0];
-      console.log(`         └─ ${preview}`);
+      logger.warn(`Step error preview: ${preview}`, { step: step.step });
     }
   }
 
-  console.log("");
   if (report.success) {
-    console.log("  Knowledge base is ready. Start the server with:");
-    console.log("    bun run server");
+    logger.info(
+      "Knowledge base is ready. Start the server with: bun run server",
+    );
   } else {
-    console.log("  Review errors above. Fix failing chunks, then re-run:");
-    console.log("    bun run ingest <sources>");
+    logger.warn(
+      "Review errors above. Fix failing chunks, then re-run: bun run ingest <sources>",
+    );
   }
-  console.log("");
 }
 
 main().catch((err) => {
-  console.error("❌ Orchestrator failed:", err);
+  logger.error("Orchestrator failed", {
+    error: err instanceof Error ? err.message : String(err),
+  });
   process.exit(1);
 });

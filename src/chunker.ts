@@ -28,6 +28,7 @@
 
 import { createHash } from "crypto";
 import { CONFIG } from "./config.js";
+import { logger } from "./logger.js";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -463,22 +464,23 @@ export async function decodePdfToText(base64: string): Promise<string> {
 
   const MB = 1024 * 1024;
   if (buf.length > MB) {
-    console.warn(
-      `⚠️  [chunker] Large document: ${(buf.length / MB).toFixed(1)} MB — ` +
-        `text extraction may be slow.`,
-    );
+    logger.warn("[chunker] Large document — text extraction may be slow", {
+      sizeMB: (buf.length / MB).toFixed(1),
+    });
   }
 
   try {
     const parser = new PDFParse(new Uint8Array(buf));
     const result = await parser.getText();
     const text = result.text ?? "";
-    console.log(`📐 [chunker] Extracted ${text.length} chars of text from PDF`);
+    logger.info("[chunker] PDF text extracted", { chars: text.length });
     return text;
   } catch (err) {
-    console.warn(
-      `⚠️  [chunker] pdf-parse failed (image-only PDF?). Falling back to LLM-only extraction.`,
-      err,
+    logger.warn(
+      "[chunker] pdf-parse failed — falling back to LLM-only extraction",
+      {
+        error: err instanceof Error ? err.message : String(err),
+      },
     );
     return "";
   }
@@ -486,17 +488,19 @@ export async function decodePdfToText(base64: string): Promise<string> {
 
 // ─── Segment summary ──────────────────────────────────────────────────────────
 
-/** Print a human-readable summary of segments for debugging. */
+/** Log a structured summary of segments (replaces console.log for ELK). */
 export function logSegmentSummary(segments: DocumentSegment[]): void {
-  console.log(
-    `\n📐 Document segmented into ${segments.length} boundary-anchored section(s):\n`,
-  );
+  logger.info("[chunker] Document segmented", {
+    totalSegments: segments.length,
+  });
   for (const seg of segments) {
-    console.log(`  [${seg.index}] ${seg.stableChunkId}`);
-    console.log(`       Heading: ${seg.headingPath.join(" › ")}`);
-    console.log(
-      `       Pages:   ${seg.pageRange.start}–${seg.pageRange.end}  |  Chars: ${seg.content.length}`,
-    );
+    logger.debug("[chunker] Segment boundary", {
+      index: seg.index,
+      stableChunkId: seg.stableChunkId,
+      heading: seg.headingPath.join(" › "),
+      pageStart: seg.pageRange.start,
+      pageEnd: seg.pageRange.end,
+      chars: seg.content.length,
+    });
   }
-  console.log("");
 }

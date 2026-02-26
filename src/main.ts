@@ -4,6 +4,7 @@ import { readFile } from "fs/promises";
 import { join } from "path";
 import { answerTroubleshootingQuestion } from "./llm-client.js";
 import type { ChatResponse } from "./schemas.js";
+import { logger } from "./logger.js";
 
 const GUIDE_PATH = join(process.cwd(), "data", "guide.yaml");
 
@@ -95,10 +96,11 @@ function renderResponse(parsed: ChatResponse | ChatResponse[]): void {
 const DEBUG_MODE = process.argv.includes("--debug");
 
 async function startChat() {
+  logger.info("Starting HWL Troubleshooting Assistant CLI UI");
   console.log("\n🔧 HWL Troubleshooting Assistant");
   if (DEBUG_MODE) {
-    console.log(
-      "🔍  Running in DEBUG MODE — retrieved chunks will be shown before each answer",
+    logger.debug(
+      "Running in DEBUG MODE — retrieved chunks will be shown before each answer",
     );
   }
   console.log("");
@@ -121,15 +123,15 @@ async function startChat() {
       console.log(`  • [${processId}] ${processName}: ${description}`);
     }
   } catch {
-    console.error(
-      "❌ guide.yaml not found. Run extraction first: bun run extract <file>",
+    logger.error(
+      "guide.yaml not found. Run extraction first: bun run extract <file>",
     );
     process.exit(1);
   }
 
   if (processCount === 0) {
-    console.error(
-      "❌ No processes found in guide.yaml. Run extraction first: bun run extract <file>",
+    logger.error(
+      "No processes found in guide.yaml. Run extraction first: bun run extract <file>",
     );
     process.exit(1);
   }
@@ -153,6 +155,7 @@ async function startChat() {
         question.toLowerCase() === "exit" ||
         question.toLowerCase() === "quit"
       ) {
+        logger.info("User requested exit");
         console.log("\nGoodbye!");
         rl.close();
         process.exit(0);
@@ -202,14 +205,24 @@ async function startChat() {
           conversationHistory.splice(0, 2);
         }
       } catch (apiError) {
-        console.error("\nAPI Error:", apiError);
-        console.log("Please check your API key in .env file\n");
+        logger.error("API Error during chat", {
+          error:
+            apiError instanceof Error ? apiError.message : String(apiError),
+        });
+        console.log("\nAPI Error. Please check your API key in .env file\n");
       }
     } catch (error) {
-      console.error("\nError:", error);
+      logger.error("Unexpected error during chat", {
+        error: error instanceof Error ? error.message : String(error),
+      });
       console.log("");
     }
   }
 }
 
-startChat().catch(console.error);
+startChat().catch((err) => {
+  logger.error("startChat failed", {
+    error: err instanceof Error ? err.message : String(err),
+  });
+  console.error("Chat failure:", err);
+});

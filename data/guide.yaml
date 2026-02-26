@@ -4,267 +4,105 @@
 
 chunks:
 
-  - chunk_id: hwl-agency-assignment-agreement-v4-add-agreement-note-6ba3f547
-    topic: Add Agreement Note
+  - chunk_id: add-candidate-to-staff-pool-8f414f92
+    source: HWL Agency_Staff Pool V3.pdf
+    topic: Staff Pool
     summary: >
-      Details the process for adding notes to an agreement for communication or record-keeping purposes.
+      How to add a candidate to the Staff Pool in HWL.
     triggers:
-      - "How do I add notes to an agreement?"
-      - "Can I document additional contract information?"
-      - "Where to add comments in an agreement?"
+      - "add candidate to staff pool"
+      - "how do I add a new candidate?"
+      - "staff pool add process"
+    has_conditions: false
+    related_chunks:
+      - upload-proposal-documents-d577011d
+      - upload-credentialing-documents-0a786c55
+      - deactivate-activate-candidate-profile-95802328
+    status: active
+
+  - chunk_id: confirmation-mgmt-actions-74a00863
+    source: HWL Agency_Staff Pool V3.pdf
+    topic: Confirmation Management
+    summary: >
+      Actions available in the Confirmation Management section of HWL Staff Pool.
+    triggers:
+      - "confirmation management actions"
+      - "review candidate agreements"
+      - "agreement pending facility response"
     has_conditions: true
-    escalation: "Contact HWL Account Manager if program manager does not respond to a note."
     related_chunks:
-      - hwl-agency-assignment-agreement-v4-while-candidate-is-in-act-842b8626
-      - hwl-agency-assignment-agreement-v4-update-assignment-agreeme-2b105a48
-      - hwl-agency-assignment-agreement-v4-while-candidate-is-on-ass-d1cf0608
+      - add-candidate-to-staff-pool-8f414f92
+      - deactivate-activate-candidate-profile-95802328
     status: active
-    file: data/chunks/hwl-agency-assignment-agreement-v4-add-agreement-note-6ba3f547.md
 
-  - chunk_id: hwl-agency-assignment-agreement-v4-approve-review-facility-r-8235b8b3
-    topic: Approve/Review Facility Renegotiated Agreements
+  - chunk_id: deactivate-activate-candidate-profile-95802328
+    source: HWL Agency_Staff Pool V3.pdf
+    topic: Candidate Profile Status
     summary: >
-      This provides step-by-step instructions for agencies to review and approve or renegotiate facility-updated Assignment Agreements.
+      How to deactivate or activate a candidate profile in HWL.
     triggers:
-      - "how to approve renegotiated agreements"
-      - "review facility updated agreements"
-      - "steps to accept and finalize Assignment Agreements"
-      - "respond to facility renegotiation"
-      - "agency signature for revised agreements"
-    has_conditions: true
-    escalation: "If facility negotiations cannot be resolved and agreements remain unsigned."
-    related_chunks:
-      - hwl-agency-assignment-agreement-v4-contracts-pending-facilit-295e5389
-      - hwl-agency-assignment-agreement-v4-sign-approve-agreement-208f90e2
-      - hwl-agency-assignment-agreement-v4-modify-finalized-agreemen-56fcd484
-    status: active
-    file: data/chunks/hwl-agency-assignment-agreement-v4-approve-review-facility-r-8235b8b3.md
-
-  - chunk_id: hwl-agency-assignment-agreement-v4-contracts-pending-facilit-295e5389
-    topic: Contracts Pending Facility Response
-    summary: >
-      Explains where to find and how to manage contracts renegotiated by the agency and awaiting facility review or response.
-    triggers:
-      - "contracts waiting for facility approval"
-      - "renegotiated contracts pending response"
-      - "dashboard renego waiting on facility"
+      - "deactivate candidate profile"
+      - "activate staff profile"
+      - "how to change candidate status to inactive"
     has_conditions: false
-    escalation: null
     related_chunks:
-      - hwl-agency-assignment-agreement-v4-approve-review-facility-r-8235b8b3
-      - hwl-agency-assignment-agreement-v4-sign-approve-agreement-208f90e2
+      - add-candidate-to-staff-pool-8f414f92
+      - upload-credentialing-documents-0a786c55
     status: active
-    file: data/chunks/hwl-agency-assignment-agreement-v4-contracts-pending-facilit-295e5389.md
 
-  - chunk_id: hwl-agency-assignment-agreement-v4-modify-agreement-start-or-67d9d1db
-    topic: Modify Agreement Start or End Dates
+  - chunk_id: update-email-preferences-default-1c7bcac7
+    source: HWL Agency_Update Email Preferences V2.pdf
+    topic: Update Email Preferences (Default Selection)
     summary: >
-      This section provides instructions on altering the start or end dates of an assignment agreement using the 'Basic Info & Dates' tab.
+      This explains how to set all email notifications and job titles to default selections in the HWL system.
     triggers:
-      - "change start date of agreement"
-      - "how to extend contract dates"
-      - "edit end date of assignment"
-      - "modify contract timeline"
-      - "update agreement dates"
+      - "How do I set default email notifications?"
+      - "Subscribe to all HWL email notifications"
+      - "Default job title notifications HWL"
     has_conditions: false
-    escalation: null
     related_chunks:
-      - hwl-agency-assignment-agreement-v4-update-assignment-agreeme-2b105a48
-      - hwl-agency-assignment-agreement-v4-modify-finalized-agreemen-56fcd484
+      - update-email-preferences-manual-9ee9fd8b
     status: active
-    file: data/chunks/hwl-agency-assignment-agreement-v4-modify-agreement-start-or-67d9d1db.md
 
-  - chunk_id: hwl-agency-assignment-agreement-v4-modify-candidate-availabi-0395a8e5
-    topic: Modify Candidate Availability for Nursing Allied or Non-Clinical Candidate
+  - chunk_id: update-email-preferences-manual-9ee9fd8b
+    source: HWL Agency_Update Email Preferences V2.pdf
+    topic: Update Email Preferences (Manual Selection)
     summary: >
-      Explains how to modify time off requests for Nursing Allied or Non-Clinical candidates in the 'Availability Info' tab of the Assignment Agreement.
+      This explains how to manually customize email preferences and job title notifications in the HWL system.
     triggers:
-      - "modify candidate availability"
-      - "add or remove time off requests"
-      - "update time off for non-clinical candidates"
-      - "change availability for nursing candidates"
-      - "how to remove requested time off"
+      - "How do I update email preferences?"
+      - "Manual email notification settings"
+      - "Customizing job title subscriptions HWL"
     has_conditions: false
-    escalation: null
     related_chunks:
-      - hwl-agency-assignment-agreement-v4-modify-candidate-availabi-d1758ba5
-      - hwl-agency-assignment-agreement-v4-modify-finalized-agreemen-56fcd484
+      - update-email-preferences-default-1c7bcac7
     status: active
-    file: data/chunks/hwl-agency-assignment-agreement-v4-modify-candidate-availabi-0395a8e5.md
 
-  - chunk_id: hwl-agency-assignment-agreement-v4-modify-candidate-availabi-045e6a23
-    topic: Modify Candidate Availability for AP/Physician
+  - chunk_id: upload-credentialing-documents-0a786c55
+    source: HWL Agency_Staff Pool V3.pdf
+    topic: Credentialing Documents
     summary: >
-      This chunk explains how to modify candidate shift availability and update assignment rates for AP/Physician positions.
+      Steps for uploading credentialing documents to a candidate’s profile in HWL.
     triggers:
-      - "How to modify AP/Physician candidate availability?"
-      - "Update physician shift timings"
-      - "Change rates for physician assignments"
-      - "How to adjust candidate availability for AP role?"
-      - "Editing agency proposed rates for assignments"
-    has_conditions: true
-    escalation: "Contact the HWL Account Manager for shift adjustments or unresolved facility negotiations."
-    related_chunks:
-      - hwl-agency-assignment-agreement-v4-modify-candidate-availabi-d1758ba5
-      - hwl-agency-assignment-agreement-v4-modify-candidate-availabi-0395a8e5
-      - hwl-agency-assignment-agreement-v4-modify-finalized-agreemen-56fcd484
-    status: active
-    file: data/chunks/hwl-agency-assignment-agreement-v4-modify-candidate-availabi-045e6a23.md
-
-  - chunk_id: hwl-agency-assignment-agreement-v4-modify-candidate-availabi-d1758ba5
-    topic: Candidate Availability Modification
-    summary: >
-      How to modify the availability for Nursing, Allied, or Non-Clinical candidates in the Assignment Agreement.
-    triggers:
-      - "how to change candidate availability"
-      - "update nursing candidate availability"
-      - "add or remove candidate time off"
-      - "edit non-clinical candidate time off"
-      - "assignment agreement availability tab"
-    has_conditions: true
-    escalation: null
-    related_chunks:
-      - hwl-agency-assignment-agreement-v4-modify-candidate-availabi-045e6a23
-      - hwl-agency-assignment-agreement-v4-modify-candidate-availabi-0395a8e5
-      - hwl-agency-assignment-agreement-v4-modify-finalized-agreemen-56fcd484
-    status: active
-    file: data/chunks/hwl-agency-assignment-agreement-v4-modify-candidate-availabi-d1758ba5.md
-
-  - chunk_id: hwl-agency-assignment-agreement-v4-modify-finalized-agreemen-56fcd484
-    topic: Modify Finalized Agreement
-    summary: >
-      How to modify finalized assignment agreements, including steps for different updates.
-    triggers:
-      - "modify finalized agreement"
-      - "edit finalized agency assignment"
-      - "update finalized contract details"
-      - "how to modify candidate agreement"
-      - "change finalized agreement details"
-    has_conditions: true
-    escalation: "null"
-    related_chunks:
-      - hwl-agency-assignment-agreement-v4-modify-candidate-availabi-d1758ba5
-      - hwl-agency-assignment-agreement-v4-modify-agreement-start-or-67d9d1db
-      - hwl-agency-assignment-agreement-v4-update-assignment-agreeme-2b105a48
-    status: active
-    file: data/chunks/hwl-agency-assignment-agreement-v4-modify-finalized-agreemen-56fcd484.md
-
-  - chunk_id: hwl-agency-assignment-agreement-v4-sign-approve-agreement-208f90e2
-    topic: Sign (Approve) Assignment Agreement
-    summary: >
-      This chunk covers how to sign and approve new assignment agreements using the HWL system.
-    triggers:
-      - "how to sign an assignment agreement"
-      - "approve placement agreement"
-      - "agency assignment agreement approval process"
-      - "pending agency signature agreement HWL"
-      - "dashboard sign agreements instructions"
-    has_conditions: true
-    escalation: "null"
-    related_chunks:
-      - hwl-agency-assignment-agreement-v4-signature-option-descript-70e63645
-      - hwl-agency-assignment-agreement-v4-approve-review-facility-r-8235b8b3
-      - hwl-agency-assignment-agreement-v4-update-assignment-agreeme-2b105a48
-    status: active
-    file: data/chunks/hwl-agency-assignment-agreement-v4-sign-approve-agreement-208f90e2.md
-
-  - chunk_id: hwl-agency-assignment-agreement-v4-signature-option-descript-70e63645
-    topic: Signature Option Description
-    summary: >
-      Explains the signature options available for handling assignment agreements and their approval processes.
-    triggers:
-      - "what does send to facility mean in assignment agreement"
-      - "approve partially accepted facility modifications"
-      - "clarify signature options for assignment agreements"
-      - "facility clarification request process"
-      - "agency action for agreement signatures"
+      - "upload credentialing documents"
+      - "how to complete credentialing"
+      - "candidate required documents upload"
     has_conditions: false
-    escalation: null
     related_chunks:
-      - hwl-agency-assignment-agreement-v4-sign-approve-agreement-208f90e2
-      - hwl-agency-assignment-agreement-v4-approve-review-facility-r-8235b8b3
-      - hwl-agency-assignment-agreement-v4-add-agreement-note-6ba3f547
+      - upload-proposal-documents-d577011d
     status: active
-    file: data/chunks/hwl-agency-assignment-agreement-v4-signature-option-descript-70e63645.md
 
-  - chunk_id: hwl-agency-assignment-agreement-v4-update-assignment-agreeme-2b105a48
-    topic: Update Assignment Agreement in Progress
+  - chunk_id: upload-proposal-documents-d577011d
+    source: HWL Agency_Staff Pool V3.pdf
+    topic: Proposal Documents
     summary: >
-      How to update an assignment agreement during the onboarding process.
+      Steps to upload proposal documents to a candidate’s staff pool profile.
     triggers:
-      - "update agreement in progress"
-      - "modify onboarding agreement"
-      - "revise assignment agreement"
-      - "update candidate contract"
-      - "revise agreement pending approval"
+      - "upload proposal documents"
+      - "how to upload resume for candidate"
+      - "proposal documents upload instructions"
     has_conditions: false
-    escalation: null
     related_chunks:
-      - hwl-agency-assignment-agreement-v4-sign-approve-agreement-208f90e2
-      - hwl-agency-assignment-agreement-v4-add-agreement-note-6ba3f547
-      - hwl-agency-assignment-agreement-v4-modify-finalized-agreemen-56fcd484
+      - add-candidate-to-staff-pool-8f414f92
+      - upload-credentialing-documents-0a786c55
     status: active
-    file: data/chunks/hwl-agency-assignment-agreement-v4-update-assignment-agreeme-2b105a48.md
-
-  - chunk_id: hwl-agency-assignment-agreement-v4-while-candidate-is-in-act-842b8626
-    topic: While Candidate is in Active Onboarding
-    summary: >
-      Guidelines for adding notes to the agreement while a candidate is in active onboarding.
-    triggers:
-      - "how to update notes during active onboarding"
-      - "add notes to candidate agreement onboarding"
-      - "where to find comments box for onboarding candidate agreements"
-    has_conditions: false
-    escalation: null
-    related_chunks:
-      - hwl-agency-assignment-agreement-v4-add-agreement-note-6ba3f547
-      - hwl-agency-assignment-agreement-v4-update-assignment-agreeme-2b105a48
-    status: active
-    file: data/chunks/hwl-agency-assignment-agreement-v4-while-candidate-is-in-act-842b8626.md
-
-  - chunk_id: hwl-agency-assignment-agreement-v4-while-candidate-is-on-ass-d1cf0608
-    topic: While Candidate is on Assignment
-    summary: >
-      Describes the process for managing assignment agreements while the candidate is actively on assignment.
-    triggers:
-      - "How to modify an agreement while the candidate is on assignment?"
-      - "Steps to add notes to a candidate's agreement during assignment"
-      - "What to do when a candidate has multiple agreements listed?"
-    has_conditions: false
-    escalation: null
-    related_chunks:
-      - hwl-agency-assignment-agreement-v4-modify-finalized-agreemen-56fcd484
-      - hwl-agency-assignment-agreement-v4-update-assignment-agreeme-2b105a48
-      - hwl-agency-assignment-agreement-v4-add-agreement-note-6ba3f547
-    status: active
-    file: data/chunks/hwl-agency-assignment-agreement-v4-while-candidate-is-on-ass-d1cf0608.md
-
-  - chunk_id: hwl-agency-update-email-preferences-v2-default-selection-e895c844
-    topic: Default Email Notification Selection
-    summary: >
-      Explains how to enable the default setting for receiving all email notifications in HWL.
-    triggers:
-      - "set default email preferences"
-      - "subscribe to all notifications"
-      - "enable default email notifications"
-      - "default email selection in HWL"
-      - "add default email preferences HWL"
-    has_conditions: false
-    escalation: null
-    related_chunks:
-    status: active
-    file: data/chunks/hwl-agency-update-email-preferences-v2-default-selection-e895c844.md
-
-  - chunk_id: hwl-agency-update-email-preferences-v2-manual-selection-7c2790fa
-    topic: Manual Selection for Email Preferences
-    summary: >
-      Explains how to customize email notifications by manually selecting preferences for job titles and email notices in the HWL system.
-    triggers:
-      - "how to update email preferences in HWL"
-      - "customize job title notifications HWL"
-      - "choose email preferences manually in HWL"
-    has_conditions: false
-    escalation: null
-    related_chunks:
-    status: active
-    file: data/chunks/hwl-agency-update-email-preferences-v2-manual-selection-7c2790fa.md

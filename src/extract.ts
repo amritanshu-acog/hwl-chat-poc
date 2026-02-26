@@ -1,11 +1,13 @@
-import { readFile, writeFile, mkdir, readdir, stat } from "fs/promises";
+import { readFile, writeFile, mkdir, readdir, stat, unlink } from "fs/promises";
 import { join, resolve, extname, basename } from "path";
+import { createHash } from "crypto";
 import { extractChunksFromDocument } from "./llm-client.js";
 import type { GuideEntry, LLMChunkOutput } from "./schemas.js";
 import {
   loadManifest,
   saveManifest,
   hashBuffer,
+  isUnchanged,
   recordExtraction,
   getChunkIdsForSource,
 } from "./scripts/source-manifest.js";
@@ -16,17 +18,24 @@ import {
   type DocumentSegment,
 } from "./chunker.js";
 import { CONFIG } from "./config.js";
+import { logger } from "./logger.js";
+import { childLogger } from "./logger.js";
 
 // ─── Markdown chunk assembler ──────────────────────────────────────────────────
 // Converts a validated LLMChunkOutput into the canonical .md format defined
 // in the architecture spec. Front matter is YAML, body has fixed sections.
 
-function assembleChunkMarkdown(chunk: LLMChunkOutput): string {
+function assembleChunkMarkdown(
+  chunk: LLMChunkOutput,
+  source: string,
+  extractionType: "procedure" | "qna" | "chat",
+): string {
   const lines: string[] = [];
 
   // ── YAML front matter ────────────────────────────────────────────────────────
   lines.push("---");
   lines.push(`chunk_id: ${chunk.chunk_id}`);
+  lines.push(`source: ${source}`);
   lines.push(`topic: ${chunk.topic}`);
 
   // Multi-line summary uses YAML block scalar
@@ -61,9 +70,13 @@ function assembleChunkMarkdown(chunk: LLMChunkOutput): string {
   lines.push(chunk.context.trim());
   lines.push("");
 
+  // ── Response — always present for active chunks ──────────────────────────────
+  lines.push("## Response");
+  lines.push("");
+
   // ── Conditions — only when has_conditions: true ──────────────────────────────
   if (chunk.has_conditions && chunk.conditions) {
-    lines.push("## Conditions");
+    lines.push("### Conditions");
     lines.push("");
     lines.push(chunk.conditions.trim());
     lines.push("");
@@ -71,41 +84,14 @@ function assembleChunkMarkdown(chunk: LLMChunkOutput): string {
 
   // ── Constraints — only when hard limits exist ────────────────────────────────
   if (chunk.constraints) {
-    lines.push("## Constraints");
+    lines.push("#### Constraints");
     lines.push("");
     lines.push(chunk.constraints.trim());
     lines.push("");
   }
 
-  // ── Response — always present for active chunks ──────────────────────────────
-  lines.push("## Response");
-  lines.push("");
   lines.push(chunk.response.trim());
   lines.push("");
-
-  // ── Escalation — always present ──────────────────────────────────────────────
-  lines.push("## Escalation");
-  lines.push("");
-  lines.push(chunk.escalation_detail.trim());
-  lines.push("");
-
-  // ── Image descriptions — appended if present ─────────────────────────────────
-  // These are not customer-facing but are stored in the chunk for future use
-  // (e.g. generating alt text, grounding answers with visual context).
-  if (chunk.image_descriptions && chunk.image_descriptions.length > 0) {
-    lines.push("## Images");
-    lines.push("");
-    for (const img of chunk.image_descriptions) {
-      lines.push(`### ${img.caption || "Unnamed image"}`);
-      lines.push("");
-      lines.push(`**Position:** ${img.position_hint}`);
-      lines.push("");
-      lines.push(`**Description:** ${img.full_description}`);
-      lines.push("");
-      lines.push(`**Relevance:** ${img.relevance}`);
-      lines.push("");
-    }
-  }
 
   return lines.join("\n");
 }
@@ -127,16 +113,13 @@ async function loadGuide(): Promise<GuideEntry[]> {
     for (const block of blocks) {
       try {
         const chunk_id = block.match(/^\s*([^\n]+)/)?.[1]?.trim() ?? "";
+        const source =
+          block.match(/\n\s+source:\s*(.+)/)?.[1]?.trim() ?? "unknown";
         const topic = block.match(/\n\s+topic:\s*(.+)/)?.[1]?.trim() ?? "";
         const summary =
           block.match(/summary:\s*>\s*\n\s+(.+)/)?.[1]?.trim() ?? "";
-        const file = block.match(/\n\s+file:\s*(.+)/)?.[1]?.trim() ?? "";
         const has_conditions =
           block.match(/\n\s+has_conditions:\s*(true|false)/)?.[1] === "true";
-        const escalationRaw =
-          block.match(/\n\s+escalation:\s*(.+)/)?.[1]?.trim() ?? "null";
-        const escalation =
-          escalationRaw === "null" ? null : escalationRaw.replace(/^"|"$/g, "");
         const status = (block.match(/\n\s+status:\s*(\w+)/)?.[1]?.trim() ??
           "active") as "active" | "review" | "deprecated";
 
@@ -164,14 +147,13 @@ async function loadGuide(): Promise<GuideEntry[]> {
         if (chunk_id && topic) {
           entries.push({
             chunk_id,
+            source,
             topic,
             summary,
             triggers,
             has_conditions,
-            escalation,
             related_chunks,
             status,
-            file,
           });
         }
       } catch {
@@ -201,6 +183,7 @@ async function saveGuide(entries: GuideEntry[]): Promise<void> {
 
   for (const entry of entries) {
     lines.push(`  - chunk_id: ${entry.chunk_id}`);
+    lines.push(`    source: ${entry.source}`);
     lines.push(`    topic: ${entry.topic}`);
     lines.push(`    summary: >`);
     lines.push(`      ${entry.summary}`);
@@ -212,24 +195,17 @@ async function saveGuide(entries: GuideEntry[]): Promise<void> {
 
     lines.push(`    has_conditions: ${entry.has_conditions}`);
 
-    if (entry.escalation) {
-      lines.push(`    escalation: "${entry.escalation.replace(/"/g, "'")}"`);
-    } else {
-      lines.push(`    escalation: null`);
-    }
-
     lines.push(`    related_chunks:`);
     for (const rel of entry.related_chunks) {
       lines.push(`      - ${rel}`);
     }
 
     lines.push(`    status: ${entry.status}`);
-    lines.push(`    file: ${entry.file}`);
     lines.push("");
   }
 
   await writeFile(GUIDE_PATH, lines.join("\n"), "utf-8");
-  console.log(`\n📘 guide.yaml updated — ${entries.length} chunk(s)\n`);
+  logger.info("guide.yaml updated", { totalChunks: entries.length });
 }
 
 // ─── Guide context-window size guard (GAP-D1-19) ─────────────────────────────
@@ -255,25 +231,22 @@ async function checkContextWindowSize(
     currentCount > MAX_CHUNKS_BEFORE_WARNING ||
     fileKb > MAX_GUIDE_KB_BEFORE_WARNING
   ) {
-    console.warn(`
-⚠️  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-⚠️  CONTEXT WINDOW SIZE WARNING (GAP-D1-19)
-⚠️
-⚠️  Knowledge base now has ${currentCount} chunks (${fileKb.toFixed(1)} KB).
-⚠️  Retrieval sends the full guide.yaml to the LLM on every query.
-⚠️  At this scale, you risk exceeding the LLM context window.
-⚠️
-⚠️  Recommended: migrate to embedding-based retrieval (vector store).
-⚠️  See: https://sdk.vercel.ai/docs/ai-sdk-core/embeddings
-⚠️  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-`);
+    logger.warn(
+      "GAP-D1-19: Context window size warning — consider embedding-based retrieval",
+      {
+        chunkCount: currentCount,
+        guideSizeKB: fileKb.toFixed(1),
+        recommendation: "Migrate to embedding-based retrieval (vector store)",
+        ref: "https://sdk.vercel.ai/docs/ai-sdk-core/embeddings",
+      },
+    );
   }
 }
 
 async function readPdf(
   filePath: string,
 ): Promise<{ base64: string; buf: Buffer }> {
-  console.log(`📄 Reading PDF: ${filePath}`);
+  logger.info("Reading PDF", { filePath });
   const buf = await readFile(filePath);
   return { base64: buf.toString("base64"), buf };
 }
@@ -288,16 +261,20 @@ async function readPdf(
 async function fallbackExtract(
   base64: string,
   source: string,
-  extractionType: "procedure" | "qna" = "procedure",
+  extractionType: "procedure" | "qna" | "chat" = "procedure",
 ): Promise<LLMChunkOutput[]> {
-  const label = `⏱  LLM extraction (single-shot) [${basename(source)}]`;
-  console.time(label);
+  const log = childLogger({ source: basename(source), extractionType });
+  log.info("LLM extraction (single-shot) started");
+  const t0 = Date.now();
   const chunks = await extractChunksFromDocument(
     base64,
     undefined,
     extractionType,
   );
-  console.timeEnd(label);
+  log.info("LLM extraction (single-shot) complete", {
+    durationMs: Date.now() - t0,
+    chunksProduced: chunks.length,
+  });
   return chunks;
 }
 
@@ -316,18 +293,18 @@ async function extractFromSegments(
   segments: DocumentSegment[],
   base64: string,
   source: string,
-  extractionType: "procedure" | "qna" = "procedure",
+  extractionType: "procedure" | "qna" | "chat" = "procedure",
 ): Promise<LLMChunkOutput[]> {
   const { deriveChunkId } = await import("./chunker.js");
   const allChunks: LLMChunkOutput[] = [];
 
-  console.log(
-    `\n📋 Extracting ${segments.length} segment(s) individually (${extractionType} mode)...\n`,
-  );
+  logger.info("Segment-level extraction started", {
+    totalSegments: segments.length,
+    extractionType,
+  });
 
   for (const seg of segments) {
-    const label = `⏱  segment [${seg.stableChunkId}]`;
-    console.time(label);
+    const t0 = Date.now();
 
     let segmentPrompt: string;
 
@@ -339,7 +316,7 @@ async function extractFromSegments(
         `SECTION TEXT:\n${seg.content}\n\n---\n\n` +
         `Extract ONLY valid Questions and Answers found in this section.\n` +
         `Required fields for each Q&A chunk: chunk_id, topic, summary, triggers (the question), ` +
-        `has_conditions, escalation, related_chunks, status, context, response (the answer), image_descriptions.\n` +
+        `has_conditions, escalation, related_chunks, status, context, response (the answer).\n` +
         `Return ONLY a raw JSON array. Start with [ and end with ]. No markdown fences.`;
     } else {
       segmentPrompt =
@@ -349,17 +326,21 @@ async function extractFromSegments(
         `SECTION TEXT:\n${seg.content}\n\n---\n\n` +
         `Extract the knowledge in this section only. Produce a SINGLE chunk JSON object (not an array).\n` +
         `Required fields: chunk_id, topic, summary, triggers, has_conditions, escalation, ` +
-        `related_chunks, status, context, response, escalation_detail, image_descriptions.\n` +
+        `related_chunks, status, context, response, escalation_detail.\n` +
         `Return ONLY valid JSON. No markdown fences. No explanation.`;
     }
 
     try {
       const chunks = await extractChunksFromDocument(
-        base64,
+        extractionType === "qna" ? "" : base64,
         segmentPrompt,
         extractionType,
       );
-      console.timeEnd(label);
+      logger.info("Segment LLM call complete", {
+        segmentId: seg.stableChunkId,
+        durationMs: Date.now() - t0,
+        chunksProduced: chunks.length,
+      });
 
       for (const chunk of chunks) {
         // Override LLM-generated ID with our deterministic content-hash ID
@@ -370,19 +351,65 @@ async function extractFromSegments(
             ? `${baseStableId}-${chunks.indexOf(chunk)}`
             : baseStableId;
 
-        console.log(`  ✓ ${stableId}  (LLM suggested: ${chunk.chunk_id})`);
+        logger.debug("Chunk ID derived", {
+          stableId,
+          llmSuggestedId: chunk.chunk_id,
+        });
         allChunks.push({ ...chunk, chunk_id: stableId });
       }
     } catch (err) {
-      console.timeEnd(label);
-      console.warn(
-        `  ⚠️  Segment "${seg.stableChunkId}" extraction failed:`,
-        err,
-      );
+      logger.warn("Segment extraction failed", {
+        segmentId: seg.stableChunkId,
+        durationMs: Date.now() - t0,
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   }
 
   return allChunks;
+}
+
+// ─── Stable chunk ID helpers ──────────────────────────────────────────────────
+
+/**
+ * Convert arbitrary text to a lowercase-hyphen slug.
+ * Used to sanitise LLM-suggested chunk_id / topic into a safe slug prefix.
+ */
+function slugify(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, "")
+    .trim()
+    .replace(/[\s]+/g, "-")
+    .replace(/-+/g, "-")
+    .slice(0, 50)
+    .replace(/^-|-$/g, "");
+}
+
+/**
+ * Derive a stable, human-readable chunk ID in the form `{slug}-{shortHash}`.
+ *
+ * The 8-char hex suffix is sha256(sourceBasename + topic) — deterministic,
+ * so the same document + topic always produces the same ID regardless of
+ * what name the LLM happened to suggest this run.
+ *
+ * @param source      Absolute path to the source PDF
+ * @param topic       The chunk topic returned by the LLM
+ * @param llmSlug     Optional: the LLM-suggested chunk_id to use as slug prefix
+ */
+function deriveStableChunkId(
+  source: string,
+  topic: string,
+  llmSlug?: string,
+): string {
+  const shortHash = createHash("sha256")
+    .update(basename(source) + topic)
+    .digest("hex")
+    .slice(0, 8);
+
+  const slug = llmSlug ? slugify(llmSlug) : slugify(topic);
+
+  return `${slug}-${shortHash}`;
 }
 
 // ─── Core extraction pipeline ──────────────────────────────────────────────────
@@ -391,54 +418,135 @@ async function extractSingle(
   source: string,
   outputDir: string,
   manifest: Awaited<ReturnType<typeof loadManifest>>,
-  extractionType: "procedure" | "qna" = "procedure",
+  extractionType: "procedure" | "qna" | "chat" = "procedure",
 ): Promise<{
   saved: number;
   newCount: number;
   updatedCount: number;
   chunkIds: string[];
 }> {
+  const log = childLogger({ source: basename(source), extractionType });
   const { base64: content, buf } = await readPdf(source);
   const currentHash = hashBuffer(buf);
+  log.info("PDF loaded", { sizeKB: (buf.length / 1024).toFixed(1) });
 
-  console.log(`  ↳ PDF size: ${(buf.length / 1024).toFixed(1)} KB\n`);
+  // ── Hash-skip guard: skip entirely if PDF is unchanged and previously succeeded ─
+  const previousChunkIds = getChunkIdsForSource(manifest, source);
+  if (
+    isUnchanged(manifest, source, currentHash) &&
+    previousChunkIds.length > 0
+  ) {
+    log.info("PDF unchanged — skipping extraction (hash match)", {
+      hash: currentHash.substring(0, 16),
+      existingChunks: previousChunkIds.length,
+    });
+    return {
+      saved: 0,
+      newCount: 0,
+      updatedCount: 0,
+      chunkIds: previousChunkIds,
+    };
+  }
+
+  // ── Stale-chunk cleanup: remove all chunks from previous extraction of this PDF ─
+  // This runs when the PDF has changed (or the first run produced 0 chunks).
+  // It guarantees no orphaned entries survive in guide.yaml or data/chunks/.
+  if (previousChunkIds.length > 0) {
+    log.info("PDF changed — removing stale chunks from previous extraction", {
+      staleChunks: previousChunkIds.length,
+    });
+    const staleGuide = await loadGuide();
+    const cleanedGuide = staleGuide.filter(
+      (e) => !previousChunkIds.includes(e.chunk_id),
+    );
+    await saveGuide(cleanedGuide);
+
+    for (const chunkId of previousChunkIds) {
+      const stalePath = join(outputDir, `${chunkId}.md`);
+      try {
+        await unlink(stalePath);
+        log.info("Deleted stale chunk file", { chunkId });
+      } catch {
+        // File may not exist if the previous extraction partially failed — ignore
+      }
+    }
+  }
 
   // ── Step 1: Extract plain text for deterministic segmentation (GAP-D1-01) ────
   let chunks: LLMChunkOutput[];
 
-  const pdfText = await decodePdfToText(content);
+  const isSmallPdf = buf.length < 4 * 1024 * 1024;
 
-  if (pdfText.length > CONFIG.extraction.minTextLengthForSegmentation) {
-    // Text layer available — use deterministic segment-per-LLM-call pipeline
-    const docTitle = basename(source).replace(/\.pdf$/i, "");
-    const segments = segmentDocument(pdfText, docTitle);
-    logSegmentSummary(segments);
+  if (isSmallPdf) {
+    log.info("PDF < 4 MB — bypassing chunker, sending directly to LLM");
+    chunks = await fallbackExtract(content, source, extractionType);
+  } else {
+    const pdfText = await decodePdfToText(content);
 
-    if (segments.length === 0) {
-      console.log(
-        "  ⚠️  Segmenter produced 0 segments. Falling back to single-shot extraction.\n",
+    if (pdfText.length > CONFIG.extraction.minTextLengthForSegmentation) {
+      // Text layer available — use deterministic segment-per-LLM-call pipeline
+      const docTitle = basename(source).replace(/\.pdf$/i, "");
+      const segments = segmentDocument(pdfText, docTitle);
+      logSegmentSummary(segments);
+
+      // Save deterministic chunks to temp directories as per Milan's feedback
+      const tempPath = CONFIG.paths.temp[extractionType];
+      await mkdir(tempPath, { recursive: true });
+      for (const seg of segments) {
+        await writeFile(
+          join(tempPath, `${seg.stableChunkId}.txt`),
+          seg.content,
+          "utf-8",
+        );
+      }
+      logger.info(
+        `Dumped ${segments.length} deterministic chunks to ${tempPath}`,
+      );
+
+      if (segments.length === 0) {
+        logger.warn(
+          "Segmenter produced 0 segments. Falling back to single-shot extraction.",
+        );
+        chunks = await fallbackExtract(content, source, extractionType);
+      } else {
+        chunks = await extractFromSegments(
+          segments,
+          content,
+          source,
+          extractionType,
+        );
+      }
+    } else {
+      // Image-only PDF: no text layer — fall back to single-shot LLM extraction
+      log.warn(
+        "No text layer found in PDF — using single-shot LLM extraction",
+        {
+          textLength: pdfText.length,
+          reason: "image-only PDF or text extraction failure",
+        },
       );
       chunks = await fallbackExtract(content, source, extractionType);
-    } else {
-      chunks = await extractFromSegments(
-        segments,
-        content,
-        source,
-        extractionType,
-      );
     }
-  } else {
-    // Image-only PDF: no text layer — fall back to single-shot LLM extraction
-    console.log(
-      "  ⚠️  No text layer found (image-only PDF?). Using single-shot LLM extraction.\n",
-    );
-    chunks = await fallbackExtract(content, source, extractionType);
   }
 
   if (chunks.length === 0) {
-    console.log("  ⚠️  No chunks extracted from this document.\n");
+    log.warn("No chunks extracted from document", { source: basename(source) });
     return { saved: 0, newCount: 0, updatedCount: 0, chunkIds: [] };
   }
+
+  // ── Override LLM chunk IDs with deterministic slug-hash IDs ──────────────────
+  // The LLM picks chunk_id names non-deterministically — "add-candidate-staff-pool"
+  // on one run, "add-candidate-to-staff-pool" on the next. This makes deduplication
+  // by ID impossible. We replace the LLM ID with slug-shortHash where the 8-char
+  // hash is sha256(sourceBasename + topic), making the ID stable for the same PDF
+  // and topic even if the LLM's wording drifts between runs.
+  chunks = chunks.map((chunk) => ({
+    ...chunk,
+    chunk_id: deriveStableChunkId(source, chunk.topic, chunk.chunk_id),
+  }));
+  log.info("Stable chunk IDs assigned", {
+    chunks: chunks.map((c) => c.chunk_id),
+  });
 
   // ── Step 2: Save chunks and update guide ──────────────────────────────────────
   const guide = await loadGuide();
@@ -453,43 +561,48 @@ async function extractSingle(
       const filePath = join(outputDir, fileName);
       const relPath = `data/chunks/${fileName}`;
 
-      const markdown = assembleChunkMarkdown(chunk);
+      const markdown = assembleChunkMarkdown(
+        chunk,
+        basename(source),
+        extractionType,
+      );
       await writeFile(filePath, markdown, "utf-8");
 
       const existingIdx = guide.findIndex((e) => e.chunk_id === chunk.chunk_id);
       const entry: GuideEntry = {
         chunk_id: chunk.chunk_id,
+        source: basename(source),
         topic: chunk.topic,
         summary: chunk.summary,
         triggers: chunk.triggers,
         has_conditions: chunk.has_conditions,
-        escalation: chunk.escalation,
         related_chunks: chunk.related_chunks,
         status: chunk.status,
-        file: relPath,
       };
 
       if (existingIdx >= 0) {
         guide[existingIdx] = entry;
-        console.log(`  ↻ Updated: ${fileName}`);
+        log.info("Chunk updated", { chunkId: chunk.chunk_id, fileName });
         updatedCount++;
       } else {
         guide.push(entry);
-        console.log(`  ✓ Created: ${fileName}`);
+        log.info("Chunk created", {
+          chunkId: chunk.chunk_id,
+          fileName,
+          topic: chunk.topic,
+          triggers: chunk.triggers.length,
+          hasConditions: chunk.has_conditions,
+        });
         newCount++;
       }
-
-      console.log(`    Topic:      ${chunk.topic}`);
-      console.log(`    Summary:    ${chunk.summary}`);
-      console.log(`    Triggers:   ${chunk.triggers.length}`);
-      console.log(`    Images:     ${chunk.image_descriptions.length}`);
-      console.log(`    Conditions: ${chunk.has_conditions}`);
-      console.log("");
 
       savedCount++;
       savedChunkIds.push(chunk.chunk_id);
     } catch (error) {
-      console.error(`  ✗ Failed to save chunk "${chunk.chunk_id}":`, error);
+      log.error("Failed to save chunk", {
+        chunkId: chunk.chunk_id,
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 
@@ -521,19 +634,22 @@ async function resolveSources(args: string[]): Promise<string[]> {
         .map((f) => join(resolved, f));
 
       if (pdfs.length === 0) {
-        console.warn(`⚠️  No PDF files found in directory: ${resolved}`);
+        logger.warn("No PDF files found in directory", { directory: resolved });
       } else {
-        console.log(`📂 Found ${pdfs.length} PDF(s) in ${resolved}\n`);
+        logger.info("PDFs resolved from directory", {
+          directory: resolved,
+          count: pdfs.length,
+        });
         sources.push(...pdfs);
       }
     } else if (info.isFile()) {
       if (extname(resolved).toLowerCase() !== ".pdf") {
-        console.warn(`⚠️  Skipping non-PDF file: ${arg}`);
+        logger.warn("Skipping non-PDF file", { path: arg });
       } else {
         sources.push(resolved);
       }
     } else {
-      console.warn(`⚠️  Skipping unknown path: ${arg}`);
+      logger.warn("Skipping unknown path", { path: arg });
     }
   }
 
@@ -566,22 +682,24 @@ Tip: For a full ingestion pipeline (extract → validate → relate → rebuild)
     process.exit(1);
   }
 
-  const typeFlag = args.find((a) => a.startsWith("--type="));
-  const extractionType: "procedure" | "qna" =
-    typeFlag === "--type=qna" ? "qna" : "procedure";
+  const typeFlag = args
+    .find((a) => a.startsWith("--type="))
+    ?.replace("--type=", "");
+  const extractionType: "procedure" | "qna" | "chat" =
+    typeFlag === "qna" ? "qna" : typeFlag === "chat" ? "chat" : "procedure";
   const sourcesArgs = args.filter((a) => !a.startsWith("--type="));
 
   try {
     const sources = await resolveSources(sourcesArgs);
 
     if (sources.length === 0) {
-      console.error("❌ No valid PDF sources found.");
+      logger.error("No valid PDF sources found — aborting");
       process.exit(1);
     }
 
-    console.log(
-      `\n🚀 Starting extraction for ${sources.length} source(s)...\n`,
-    );
+    logger.info("Extraction pipeline started", {
+      totalSources: sources.length,
+    });
 
     const outputDir = CONFIG.paths.chunks;
     await mkdir(outputDir, { recursive: true });
@@ -599,7 +717,9 @@ Tip: For a full ingestion pipeline (extract → validate → relate → rebuild)
     for (let i = 0; i < sources.length; i++) {
       const source = sources[i]!;
       const label = basename(source);
-      console.log(`\n━━━ [${i + 1}/${sources.length}] ${label} ━━━\n`);
+      logger.info(`Processing source [${i + 1}/${sources.length}]`, {
+        source: label,
+      });
 
       try {
         const result = await extractSingle(
@@ -611,40 +731,35 @@ Tip: For a full ingestion pipeline (extract → validate → relate → rebuild)
         totalNew += result.newCount;
         totalUpdated += result.updatedCount;
       } catch (err) {
-        console.error(`❌ Failed to extract from ${label}:`, err);
+        logger.error("Extraction failed for source", {
+          source: label,
+          error: err instanceof Error ? err.message : String(err),
+        });
         totalFailed++;
       }
     }
 
     // ── Save updated manifest (GAP-D1-17) ─────────────────────────────────────
     await saveManifest(manifest);
-    console.log(`\n📋 source-manifest.json updated`);
+    logger.info("source-manifest.json updated");
 
     // ── Extraction summary report (GAP-D1-18) ─────────────────────────────────
     const totalElapsed = ((Date.now() - extractStart) / 1000).toFixed(1);
     const totalSaved = totalNew + totalUpdated;
 
-    console.log(`
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-📊 Extraction Summary
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-   Sources processed : ${sources.length}
-   Chunks created    : ${totalNew}
-   Chunks updated    : ${totalUpdated}
-   Sources failed    : ${totalFailed}
-   Total time        : ${totalElapsed}s
-   Output directory  : ${outputDir}
-   Guide index       : data/guide.yaml
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-Next steps:
-  1. Validate chunks:  bun run validate
-  2. Link related:     bun run relate
-  3. Rebuild index:    bun run rebuild
-  — or run all steps: bun run ingest <sources>
-`);
+    logger.info("Extraction pipeline complete", {
+      sourcesProcessed: sources.length,
+      chunksCreated: totalNew,
+      chunksUpdated: totalUpdated,
+      sourcesFailed: totalFailed,
+      totalSaved,
+      elapsedSeconds: totalElapsed,
+      outputDir,
+    });
   } catch (error) {
-    console.error("Extraction failed:", error);
+    logger.error("Extraction pipeline failed", {
+      error: error instanceof Error ? error.message : String(error),
+    });
     process.exit(1);
   }
 }

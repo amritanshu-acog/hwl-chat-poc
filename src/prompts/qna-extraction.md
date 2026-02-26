@@ -17,13 +17,18 @@ Extract EVERYTHING. Specifically:
 - Every definition, glossary term, or "what is X" explanation
 - Every troubleshooting item (symptom → cause → solution)
 - Every constraint, limitation, or "you cannot do X because Y" statement
-- Every image, screenshot, diagram, or visual — described in full detail even if referencing an answer
 
 Do not summarise loosely. Do not merge separate Q&A pairs. Do not skip questions because they seem obvious. A reader of the extracted chunks must be able to find the exact answer to a specific question without ever seeing the original document.
 
 ---
 
-## Q&A Chunk Boundaries
+## Semantic Boundaries & Chunking
+
+You are the sole arbiter of semantic boundaries. The text provided to you has been automatically pre-segmented, which means it may contain multiple distinct Q&A pairs or pieces of knowledge, or occasionally start/end mid-thought.
+
+- You MUST identify exactly where a specific question and its answer semantically starts and ends.
+- If the text contains multiple unrelated questions, output a SEPARATE JSON chunk for each one.
+- Do NOT merge distinct questions just because they appear in the same text segment!
 
 **One chunk = one question (or one tightly related cluster of 2-3 questions with the same answer).**
 
@@ -69,21 +74,6 @@ Examples:
 
 ---
 
-## Image Descriptions
-
-For every screenshot, diagram, UI mockup, or visual in the document:
-
-1. **caption** — What is shown (e.g. "FAQ Page — Password Reset Modal")
-2. **position_hint** — Where it appears relative to the answer content (e.g. "After step 2 in the answer")
-3. **full_description** — Exhaustive description:
-   - Every visible UI element: buttons, input fields, labels, icons, checkboxes
-   - Exact label text and button names (quote them)
-   - Colours used for key elements
-   - Error messages or status indicators visible
-   - The state of the page (logged in, form submitted, dropdown open, etc.)
-   - Spatial layout: what is top-left, centre, right panel, etc.
-4. **relevance** — How this visual helps answer the question
-
 ---
 
 ## Output Schema
@@ -113,14 +103,6 @@ Each object in the array must have ALL of these fields:
   "context": "string — background context: what situation prompts this question? Who asks it?",
   "response": "string — the FULL answer. Include every step if procedural. Include all sub-answers if conditional. Do not summarise — give the complete answer as it appears in the document.",
   "escalation_detail": "string — what to do if the answer doesn't resolve the issue. 'No escalation required.' if applicable.",
-  "image_descriptions": [
-    {
-      "caption": "string",
-      "position_hint": "string — where in the answer context is this image",
-      "full_description": "string — exhaustive description of all visible elements",
-      "relevance": "string — how does this image help the user answer their question"
-    }
-  ],
   "constraints": "string | null — hard system limits mentioned in the answer (omit if none)"
 }
 ```
@@ -153,7 +135,6 @@ Before returning your JSON array, verify:
 - [ ] Every `response` is complete — no truncation, no "see original PDF"
 - [ ] Every `triggers` array has at least 3 user-question phrasings
 - [ ] Chunks with `has_conditions: true` have a `conditions` field
-- [ ] All image descriptions describe every visible UI element
 - [ ] `chunk_id` follows the `{topic-slug}-{question-slug}` pattern
 - [ ] No two chunks have the same `chunk_id`
 

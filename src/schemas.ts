@@ -9,6 +9,7 @@ export const ChunkFrontMatterSchema = z.object({
     .string()
     .min(1)
     .regex(/^[a-z0-9-]+$/, "chunk_id must be lowercase-hyphenated"),
+  source: z.string().min(1),
   topic: z.string().min(1),
   summary: z.string().min(1),
   triggers: z.array(z.string()).default([]),
@@ -65,29 +66,6 @@ export const LLMChunkOutputSchema = z.object({
   constraints: z.string().optional(),
   response: z.string().min(1),
   escalation_detail: z.string().min(1),
-
-  // Image descriptions extracted from the PDF
-  image_descriptions: z
-    .array(
-      z.object({
-        position_hint: z
-          .string()
-          .describe(
-            "Where in the document this image appears, e.g. 'Page 3, after step 2'",
-          ),
-        caption: z.string().describe("Caption text if present in the PDF"),
-        full_description: z
-          .string()
-          .min(1)
-          .describe(
-            "Exhaustive visual description: layout, labels, UI elements, arrows, colours, text overlays, icons — everything visible",
-          ),
-        relevance: z
-          .string()
-          .describe("How this image supports the chunk topic"),
-      }),
-    )
-    .default([]),
 });
 
 export type LLMChunkOutput = z.infer<typeof LLMChunkOutputSchema>;
@@ -100,14 +78,13 @@ export type Chunk = z.infer<typeof ChunkSchema>;
 
 export const GuideEntrySchema = z.object({
   chunk_id: z.string(),
+  source: z.string(),
   topic: z.string(),
   summary: z.string(),
   triggers: z.array(z.string()),
   has_conditions: z.boolean(),
-  escalation: z.string().nullable(),
   related_chunks: z.array(z.string()),
   status: z.enum(["active", "review", "deprecated"]),
-  file: z.string(), // relative path to .md file
 });
 
 export type GuideEntry = z.infer<typeof GuideEntrySchema>;

@@ -25,6 +25,7 @@ import { execSync } from "child_process";
 import { ChunkFrontMatterSchema } from "../schemas.js";
 import { ZodError } from "zod";
 import { CONFIG } from "../config.js";
+import { logger } from "../logger.js";
 
 const CHUNKS_DIR = CONFIG.paths.chunks;
 
@@ -78,7 +79,7 @@ Return ONLY this JSON:
     const cleaned = cleanJson(text);
     return JSON.parse(cleaned) as ValidationResult;
   } catch {
-    console.warn(`  ⚠️  Could not parse validation response for ${chunkId}`);
+    logger.warn("Could not parse LLM validation response", { chunkId });
     // Fail safe — mark for review if we can't parse
     return {
       passed: false,
@@ -134,6 +135,7 @@ function validateStructure(raw: string, fileName: string): StructuralResult {
 
   // Parse individual fields from front matter
   const chunk_id = fm.match(/^chunk_id:\s*(.+)$/m)?.[1]?.trim() ?? "";
+  const source = fm.match(/^source:\s*(.+)$/m)?.[1]?.trim() ?? "unknown";
   const topic = fm.match(/^topic:\s*(.+)$/m)?.[1]?.trim() ?? "";
   const summary = fm.match(/^summary:\s*>\s*\n\s+(.+)$/m)?.[1]?.trim() ?? "";
   const has_conditions =
@@ -163,6 +165,7 @@ function validateStructure(raw: string, fileName: string): StructuralResult {
   try {
     ChunkFrontMatterSchema.parse({
       chunk_id,
+      source,
       topic,
       summary,
       triggers,
@@ -183,7 +186,7 @@ function validateStructure(raw: string, fileName: string): StructuralResult {
   }
 
   // ── Check required markdown sections ──────────────────────────────────────
-  const requiredSections = ["## Context", "## Response", "## Escalation"];
+  const requiredSections = ["## Context", "## Response"];
   for (const section of requiredSections) {
     if (!raw.includes(section)) {
       issues.push(`Missing required markdown section: "${section}"`);
@@ -203,33 +206,28 @@ function validateStructure(raw: string, fileName: string): StructuralResult {
 // ─── Main ──────────────────────────────────────────────────────────────────────
 
 async function main() {
-  console.log(
-    "\n🔍 Validating chunks (Phase 1: Structural · Phase 2: LLM Quality)...\n",
-  );
-  console.log(
-    "Phase 1 — Zod structural check: front-matter schema + required sections",
-  );
-  console.log(
-    "Phase 2 — LLM quality gates:    Clarity · Consistency · Completeness\n",
-  );
+  logger.info("Validation started", {
+    phase1: "Zod structural",
+    phase2: "LLM quality gates",
+  });
 
   let files: string[];
   try {
     files = (await readdir(CHUNKS_DIR)).filter((f) => f.endsWith(".md"));
   } catch {
-    console.error(`❌ Could not read chunks directory: ${CHUNKS_DIR}`);
+    logger.error("Could not read chunks directory", { dir: CHUNKS_DIR });
     process.exit(1);
   }
 
   if (files.length === 0) {
-    console.warn("⚠️  No chunks found. Run bun run extract first.");
+    logger.warn("No chunks found — run bun run extract first");
     process.exit(0);
   }
 
   // ── Phase 1: Structural validation (Zod, no LLM) ─────────────────────────
-  console.log(
-    "\n━━━ Phase 1: Structural Validation ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n",
-  );
+  logger.info("Phase 1: structural validation starting", {
+    totalFiles: files.length,
+  });
 
   let structuralPassed = 0;
   let structuralFailed = 0;
@@ -241,51 +239,47 @@ async function main() {
     const status = getStatus(raw);
 
     if (status !== "active") {
-      console.log(`  ⏭️  Skipping ${file} [${status}]`);
+      logger.debug("Skipping non-active chunk", { file, status });
       continue;
     }
 
     const structural = validateStructure(raw, file);
 
     if (structural.passed) {
-      console.log(`  ✅ ${file} — structure OK`);
+      logger.info("Phase 1 PASS", { file });
       structuralPassed++;
       activeFiles.push(file);
     } else {
-      console.log(`  ❌ ${file} — structural FAIL`);
-      for (const issue of structural.issues) {
-        console.log(`       • ${issue}`);
-      }
+      logger.warn("Phase 1 FAIL — structural issues found", {
+        file,
+        issues: structural.issues,
+      });
       // Mark as review immediately — don't waste LLM call
       const updated = updateStatus(raw, "review");
       await writeFile(filePath, updated, "utf-8");
-      console.log(`       → Marked as status: review (structural failure)`);
+      logger.info("Chunk marked as review (structural failure)", { file });
       structuralFailed++;
     }
   }
 
-  console.log(
-    `\n  Structural: ${structuralPassed} passed, ${structuralFailed} failed`,
-  );
+  logger.info("Phase 1 complete", {
+    passed: structuralPassed,
+    failed: structuralFailed,
+  });
 
   if (structuralFailed > 0) {
-    console.log(
-      `  ⚠️  Rebuilding guide.yaml to reflect structural failures...`,
-    );
+    logger.info("Rebuilding guide.yaml to reflect structural failures");
     try {
       execSync("bun run rebuild", { stdio: "inherit" });
     } catch {
-      console.error("  ❌ Guide rebuild failed. Run bun run rebuild manually.");
+      logger.error("Guide rebuild failed — run bun run rebuild manually");
     }
   }
 
   // ── Phase 2: LLM quality check (only structurally valid, active chunks) ───
-  console.log(
-    "\n━━━ Phase 2: LLM Quality Gates ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n",
-  );
-  console.log(
-    `📂 Sending ${activeFiles.length} structurally valid active chunk(s) to LLM...\n`,
-  );
+  logger.info("Phase 2: LLM quality gates starting", {
+    activeChunks: activeFiles.length,
+  });
 
   let passed = 0;
   let failed = 0;
@@ -300,53 +294,45 @@ async function main() {
     const result = await validateChunk(chunkId, raw);
 
     if (result.passed) {
-      console.log("✅ PASS");
+      logger.info("Phase 2 PASS", { chunkId });
       passed++;
     } else {
-      console.log("❌ FAIL");
+      logger.warn("Phase 2 FAIL", {
+        chunkId,
+        clarity: result.clarity,
+        consistency: result.consistency,
+        completeness: result.completeness,
+      });
       failed++;
-
-      // Log which criteria failed
-      if (!result.clarity.pass) {
-        console.log(`     Clarity:      ${result.clarity.reason}`);
-      }
-      if (!result.consistency.pass) {
-        console.log(`     Consistency:  ${result.consistency.reason}`);
-      }
-      if (!result.completeness.pass) {
-        console.log(`     Completeness: ${result.completeness.reason}`);
-      }
 
       // Mark chunk as review
       const updated = updateStatus(raw, "review");
       await writeFile(filePath, updated, "utf-8");
-      console.log(`     → Marked as status: review`);
+      logger.info("Chunk marked as review (LLM quality failure)", { chunkId });
     }
   }
 
-  console.log(`\n📊 Validation complete`);
-  console.log(`   Passed: ${passed}`);
-  console.log(`   Failed: ${failed}`);
+  logger.info("Validation complete", { passed, failed });
 
   if (failed > 0) {
-    console.log(`\n⚠️  ${failed} chunk(s) marked as status: review`);
-    console.log(`   These will be excluded from retrieval until fixed.`);
-    console.log(`   Review them in data/chunks/, fix the content, then run:`);
-    console.log(`   bun run validate\n`);
-
+    logger.warn(
+      `${failed} chunk(s) marked as review — excluded from retrieval until fixed`,
+    );
     // Rebuild guide to reflect status changes
-    console.log("🔨 Rebuilding guide.yaml to reflect status changes...\n");
+    logger.info("Rebuilding guide.yaml to reflect status changes");
     try {
       execSync("bun run rebuild", { stdio: "inherit" });
     } catch {
-      console.error("❌ Guide rebuild failed. Run bun run rebuild manually.");
+      logger.error("Guide rebuild failed — run bun run rebuild manually");
     }
   } else {
-    console.log(`\n✅ All chunks passed. Knowledge base is clean.\n`);
+    logger.info("All chunks passed validation — knowledge base is clean");
   }
 }
 
 main().catch((err) => {
-  console.error("❌ Validation failed:", err);
+  logger.error("Validation script failed", {
+    error: err instanceof Error ? err.message : String(err),
+  });
   process.exit(1);
 });

@@ -63,7 +63,7 @@ Pick the response type that best fits the situation:
 
 Severity values: `info` `warning` `danger`
 
-### `checklist` — Use for verification steps or pre-flight checks
+### `checklist` — Use when the user requests a checklist, or when content is best presented as a scannable list of discrete, actionable items. Each item must be derived strictly from the chunk documentation. Do not reframe, reinterpret, or reduce the number of items — every relevant point must appear as its own item.
 
 ```
 {

@@ -31,10 +31,3 @@ export async function loadPrompt(name: string): Promise<string> {
   promptCache.set(name, trimmed);
   return trimmed;
 }
-
-/**
- * Clear the prompt cache (useful for development / hot-reload scenarios).
- */
-export function clearPromptCache(): void {
-  promptCache.clear();
-}

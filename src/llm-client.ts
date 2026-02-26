@@ -4,7 +4,7 @@ import { loadPrompt } from "./prompt-loader.js";
 import { LLMChunkOutputSchema, ChatResponseSchema } from "./schemas.js";
 import { ZodError } from "zod";
 import type { ChatResponse, LLMChunkOutput } from "./schemas.js";
-import { readFile } from "fs/promises";
+import { readFile, writeFile, mkdir } from "fs/promises";
 import { join } from "path";
 import { CONFIG } from "./config.js";
 
@@ -96,19 +96,26 @@ export function cleanJson(raw: string): string {
 export async function extractChunksFromDocument(
   pdfBase64: string,
   overridePrompt?: string,
-  extractionType: "procedure" | "qna" = "procedure",
+  extractionType: "procedure" | "qna" | "chat" = "procedure",
 ): Promise<LLMChunkOutput[]> {
-  if (!pdfBase64 || pdfBase64.trim().length === 0) {
+  const isPdfEmpty = !pdfBase64 || pdfBase64.trim().length === 0;
+  if (isPdfEmpty && !overridePrompt) {
     console.error(
       "❌ extractChunksFromDocument received empty content. Aborting.",
     );
     return [];
   }
 
-  console.log(`📤 Sending PDF to LLM for ${extractionType} extraction...\n`);
+  console.log(
+    `📤 Sending request to LLM for ${extractionType} extraction...\n`,
+  );
 
   const systemPrompt = await loadPrompt(
-    extractionType === "qna" ? "qna-extraction" : "extraction",
+    extractionType === "qna"
+      ? "qna-extraction"
+      : extractionType === "chat"
+        ? "chat-extraction"
+        : "extraction",
   );
 
   const userMessage =
@@ -120,104 +127,144 @@ Your task:
 2. Extract EVERY image, screenshot, diagram, and visual element with exhaustive descriptions.
 3. Produce one chunk object per distinct concept — do not merge, do not skip.
 
-Required fields for every chunk: chunk_id, topic, summary, triggers, has_conditions, escalation, related_chunks, status, context, response, escalation_detail, image_descriptions.
+Required fields for every chunk: chunk_id, topic, summary, triggers, has_conditions, escalation, related_chunks, status, context, response, escalation_detail.
 
 Optional fields (include ONLY when applicable): conditions (only if has_conditions is true), constraints (only if hard system limits exist).
 
 Return ONLY a raw JSON array. Start with [ and end with ]. No markdown fences. No explanation.`;
 
+  const contentArray: any[] = [{ type: "text" as const, text: userMessage }];
+  if (!isPdfEmpty) {
+    contentArray.push({
+      type: "file" as const,
+      data: pdfBase64,
+      mediaType: "application/pdf",
+    });
+  }
+
   const messages = [
     {
       role: "user" as const,
-      content: [
-        { type: "text" as const, text: userMessage },
-        {
-          type: "file" as const,
-          data: pdfBase64,
-          mediaType: "application/pdf",
-        },
-      ],
+      content: contentArray,
     },
   ];
 
   let text: string;
-  try {
-    const result = await generateText({
-      model: model(),
-      system: systemPrompt,
-      messages,
-    });
-    text = result.text;
-  } catch (error) {
-    console.error("❌ LLM call failed during extraction:", error);
-    throw error;
-  }
+  const maxRetries = CONFIG.extraction.llmRetries ?? 2;
+  let lastError: unknown;
 
-  const cleaned = cleanJson(text);
-
-  let parsed: any;
-  try {
-    parsed = JSON.parse(cleaned);
-  } catch (parseErr) {
-    console.error("⚠️  LLM returned invalid JSON during extraction.");
-    console.error("Parse error:", parseErr);
-    console.error(
-      "Cleaned string (first 500 chars):",
-      cleaned.substring(0, 500),
-    );
-    return [];
-  }
-
-  const arr: any[] = Array.isArray(parsed) ? parsed : [parsed];
-
-  console.log(`\n🔎 Parsed ${arr.length} chunk(s) from LLM output:`);
-  arr.forEach((item, i) => {
-    console.log(`  [${i}] chunk_id:       ${item?.chunk_id ?? "MISSING"}`);
-    console.log(`       topic:          ${item?.topic ?? "MISSING"}`);
-    console.log(`       has_conditions: ${item?.has_conditions ?? "MISSING"}`);
-    console.log(`       triggers:       ${item?.triggers?.length ?? 0}`);
-    console.log(
-      `       images:         ${item?.image_descriptions?.length ?? 0}`,
-    );
-    console.log(`       has context:    ${!!item?.context}`);
-    console.log(`       has response:   ${!!item?.response}`);
-  });
-  console.log("");
-
-  const validated: LLMChunkOutput[] = [];
-  for (const item of arr) {
-    if (item?.has_conditions === true && !item?.conditions) {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    if (attempt > 0) {
       console.warn(
-        `  ⚠️  chunk "${item?.chunk_id}" has has_conditions:true but no conditions field — flagging for review`,
+        `⚠️  Retrying extraction (attempt ${attempt + 1}/${maxRetries + 1})...\n`,
       );
-      item.status = "review";
+    }
+    try {
+      const result = await generateText({
+        model: model(),
+        system: systemPrompt,
+        messages,
+        maxOutputTokens: CONFIG.extraction.maxOutputTokens,
+      });
+      text = result.text;
+    } catch (error) {
+      console.error("❌ LLM call failed during extraction:", error);
+      lastError = error;
+      continue; // retry
     }
 
+    const cleaned = cleanJson(text);
+
+    let parsed: any;
     try {
-      validated.push(LLMChunkOutputSchema.parse(item));
-    } catch (err) {
-      if (err instanceof ZodError) {
+      parsed = JSON.parse(cleaned);
+    } catch (parseErr) {
+      lastError = parseErr;
+
+      // Dump raw response to disk for inspection
+      try {
+        const reportsDir = CONFIG.paths.reports;
+        await mkdir(reportsDir, { recursive: true });
+        const debugFile = join(reportsDir, `llm-raw-debug-${Date.now()}.txt`);
+        await writeFile(debugFile, text, "utf-8");
         console.error(
-          `  ✗ Validation failed for "${item?.chunk_id ?? "unknown"}":`,
+          `⚠️  LLM returned invalid JSON during extraction (attempt ${attempt + 1}).`,
         );
-        err.issues.forEach((issue) => {
-          console.error(
-            `     • ${issue.path.join(".") || "(root)"}: ${issue.message}`,
-          );
-        });
-      } else {
+        console.error("Parse error:", parseErr);
+        console.error(`Raw response saved to: ${debugFile}`);
         console.error(
-          `  ✗ Unexpected error for "${item?.chunk_id ?? "unknown"}":`,
-          err,
+          "Cleaned string (first 500 chars):",
+          cleaned.substring(0, 500),
+        );
+      } catch {
+        console.error("⚠️  LLM returned invalid JSON during extraction.");
+        console.error("Parse error:", parseErr);
+        console.error(
+          "Cleaned string (first 500 chars):",
+          cleaned.substring(0, 500),
         );
       }
+
+      continue; // retry
     }
+
+    // ── Parse succeeded ─────────────────────────────────────────────────────────────────────
+    const arr: any[] = Array.isArray(parsed) ? parsed : [parsed];
+
+    console.log(`\n🔎 Parsed ${arr.length} chunk(s) from LLM output:`);
+    arr.forEach((item, i) => {
+      console.log(`  [${i}] chunk_id:       ${item?.chunk_id ?? "MISSING"}`);
+      console.log(`       topic:          ${item?.topic ?? "MISSING"}`);
+      console.log(
+        `       has_conditions: ${item?.has_conditions ?? "MISSING"}`,
+      );
+      console.log(`       triggers:       ${item?.triggers?.length ?? 0}`);
+      console.log(`       has context:    ${!!item?.context}`);
+      console.log(`       has response:   ${!!item?.response}`);
+    });
+    console.log("");
+
+    const validated: LLMChunkOutput[] = [];
+    for (const item of arr) {
+      if (item?.has_conditions === true && !item?.conditions) {
+        console.warn(
+          `  ⚠️  chunk "${item?.chunk_id}" has has_conditions:true but no conditions field — flagging for review`,
+        );
+        item.status = "review";
+      }
+
+      try {
+        validated.push(LLMChunkOutputSchema.parse(item));
+      } catch (err) {
+        if (err instanceof ZodError) {
+          console.error(
+            `  ✗ Validation failed for "${item?.chunk_id ?? "unknown"}":`,
+          );
+          err.issues.forEach((issue) => {
+            console.error(
+              `     • ${issue.path.join(".") || "(root)"}: ${issue.message}`,
+            );
+          });
+        } else {
+          console.error(
+            `  ✗ Unexpected error for "${item?.chunk_id ?? "unknown"}":`,
+            err,
+          );
+        }
+      }
+    }
+
+    console.log(
+      `✅ ${validated.length} chunk(s) validated from LLM extraction\n`,
+    );
+    return validated;
   }
 
-  console.log(
-    `✅ ${validated.length} chunk(s) validated from LLM extraction\n`,
+  // All retries exhausted
+  console.error(
+    `❌ All ${maxRetries + 1} extraction attempt(s) failed. Returning empty array.`,
   );
-  return validated;
+  return [];
 }
 
 // ─── Step 1: Retrieval ─────────────────────────────────────────────────────────
@@ -341,20 +388,20 @@ export async function answerTroubleshootingQuestion(
     for (const block of blocks) {
       const chunk_id = block.match(/^\s*([^\n]+)/)?.[1]?.trim() ?? "";
       if (chunkIds.includes(chunk_id)) {
-        const file = block.match(/\n\s+file:\s*(.+)/)?.[1]?.trim();
+        // Derive the chunk file path from chunk_id — guide.yaml has no `file:` field.
+        // Chunks are always stored as data/chunks/<chunk_id>.md
+        const file = `data/chunks/${chunk_id}.md`;
         const topic =
           block.match(/\n\s+topic:\s*(.+)/)?.[1]?.trim() ?? "Unknown";
         const summary =
           block.match(/summary:\s*>\s*\n\s+(.+)/)?.[1]?.trim() ?? "No summary";
-        if (file) {
-          try {
-            const content = await loadChunk(file);
-            chunkContents.push(`=== Chunk: ${chunk_id} ===\n${content}`);
-            contextChunks.push({ chunk_id, topic, summary, content, file });
-            console.log(`📦 Loaded chunk: ${chunk_id}`);
-          } catch {
-            console.warn(`⚠️  Could not load chunk file: ${file}`);
-          }
+        try {
+          const content = await loadChunk(file);
+          chunkContents.push(`=== Chunk: ${chunk_id} ===\n${content}`);
+          contextChunks.push({ chunk_id, topic, summary, content, file });
+          console.log(`📦 Loaded chunk: ${chunk_id}`);
+        } catch {
+          console.warn(`⚠️  Could not load chunk file: ${file}`);
         }
       }
     }

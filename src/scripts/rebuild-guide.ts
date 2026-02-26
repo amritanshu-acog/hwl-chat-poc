@@ -14,6 +14,7 @@ import { readFile, writeFile, readdir } from "fs/promises";
 import { join } from "path";
 import type { GuideEntry } from "../schemas.js"; // GAP-D1-07: single source of truth
 import { CONFIG } from "../config.js";
+import { logger } from "../logger.js";
 
 const CHUNKS_DIR = CONFIG.paths.chunks;
 const GUIDE_PATH = CONFIG.paths.guide;
@@ -25,21 +26,18 @@ const GUIDE_PATH = CONFIG.paths.guide;
 function extractFrontMatter(raw: string, fileName: string): GuideEntry | null {
   const fmMatch = raw.match(/^---\n([\s\S]*?)\n---/);
   if (!fmMatch) {
-    console.warn(`  ⚠️  No front matter found in ${fileName} — skipping`);
+    logger.warn("No front matter found in file", { fileName });
     return null;
   }
 
   const fm = fmMatch[1]!;
 
   const chunk_id = fm.match(/^chunk_id:\s*(.+)$/m)?.[1]?.trim() ?? "";
+  const source = fm.match(/^source:\s*(.+)$/m)?.[1]?.trim() ?? "unknown";
   const topic = fm.match(/^topic:\s*(.+)$/m)?.[1]?.trim() ?? "";
   const summary = fm.match(/^summary:\s*>\s*\n\s+(.+)$/m)?.[1]?.trim() ?? "";
   const has_conditions =
     fm.match(/^has_conditions:\s*(true|false)$/m)?.[1] === "true";
-  const escalationRaw =
-    fm.match(/^escalation:\s*(.+)$/m)?.[1]?.trim() ?? "null";
-  const escalation =
-    escalationRaw === "null" ? null : escalationRaw.replace(/^"|"$/g, "");
   const status = (fm.match(/^status:\s*(\w+)$/m)?.[1]?.trim() ??
     "active") as GuideEntry["status"];
 
@@ -59,43 +57,41 @@ function extractFrontMatter(raw: string, fileName: string): GuideEntry | null {
     : [];
 
   if (!chunk_id || !topic) {
-    console.warn(`⚠️ Missing chunk_id or topic in ${fileName} — skipping`);
+    logger.warn("Missing chunk_id or topic in file", { fileName });
     return null;
   }
 
   return {
     chunk_id,
+    source,
     topic,
     summary,
     triggers,
     has_conditions,
-    escalation,
     related_chunks,
     status,
-    file: `data/chunks/${fileName}`,
   };
 }
 
 // ─── Main ──────────────────────────────────────────────────────────────────────
 
 async function main() {
-  console.log("\n🔨 Rebuilding guide.yaml from chunk front matter...\n");
+  logger.info("Rebuilding guide.yaml from chunk front matter");
 
   let files: string[];
   try {
     files = (await readdir(CHUNKS_DIR)).filter((f) => f.endsWith(".md"));
   } catch {
-    console.error(`❌ Could not read chunks directory: ${CHUNKS_DIR}`);
-    console.error("   Run bun run extract first.");
+    logger.error("Could not read chunks directory", { dir: CHUNKS_DIR });
     process.exit(1);
   }
 
   if (files.length === 0) {
-    console.warn("⚠️  No .md files found in data/chunks/");
+    logger.warn("No .md files found in chunks directory", { dir: CHUNKS_DIR });
     process.exit(0);
   }
 
-  console.log(`📂 Found ${files.length} chunk file(s)\n`);
+  logger.info("Chunk files found", { count: files.length });
 
   const entries: GuideEntry[] = [];
   let skippedTotal = 0;
@@ -105,14 +101,19 @@ async function main() {
     const entry = extractFrontMatter(raw, file);
     if (entry) {
       if (entry.status !== "active") {
-        console.log(
-          `  ⏭️  Skipping ${file} [${entry.status}] — excluded from index`,
-        );
+        logger.debug("Skipping non-active chunk", {
+          file,
+          status: entry.status,
+        });
         skippedTotal++;
         continue;
       }
       entries.push(entry);
-      console.log(`  ✅ ${file} → ${entry.chunk_id} [${entry.status}]`);
+      logger.debug("Chunk indexed", {
+        file,
+        chunkId: entry.chunk_id,
+        status: entry.status,
+      });
     }
   }
 
@@ -127,6 +128,7 @@ async function main() {
 
   for (const entry of entries) {
     lines.push(`  - chunk_id: ${entry.chunk_id}`);
+    lines.push(`    source: ${entry.source}`);
     lines.push(`    topic: ${entry.topic}`);
     lines.push(`    summary: >`);
     lines.push(`      ${entry.summary}`);
@@ -135,17 +137,11 @@ async function main() {
       lines.push(`      - "${t.replace(/"/g, "'")}"`);
     }
     lines.push(`    has_conditions: ${entry.has_conditions}`);
-    if (entry.escalation) {
-      lines.push(`    escalation: "${entry.escalation.replace(/"/g, "'")}"`);
-    } else {
-      lines.push(`    escalation: null`);
-    }
     lines.push(`    related_chunks:`);
     for (const r of entry.related_chunks) {
       lines.push(`      - ${r}`);
     }
     lines.push(`    status: ${entry.status}`);
-    lines.push(`    file: ${entry.file}`);
     lines.push("");
   }
 
@@ -156,30 +152,34 @@ async function main() {
   const review = entries.filter((e) => e.status === "review").length;
   const deprecated = entries.filter((e) => e.status === "deprecated").length;
 
-  console.log(`\n📘 guide.yaml rebuilt`);
-  console.log(`   Total:      ${entries.length}`);
-  console.log(`   Active:     ${active}`);
-  console.log(`   Review:     ${review}`);
-  console.log(`   Deprecated: ${deprecated}`);
-
   // ── Guide Size Enforcement (Task D1-04) ──────────────────────────────────
   const guideSize = guideContent.length;
   const MAX_GUIDE_SIZE = 30000; // Recommended limit for high-accuracy retrieval
 
   if (guideSize > MAX_GUIDE_SIZE) {
-    console.warn(
-      `\n⚠️  CRITICAL: guide.yaml is ${guideSize} chars. This exceeds the ${MAX_GUIDE_SIZE} recommended limit.`,
+    logger.warn(
+      "guide.yaml exceeds recommended size limit — retrieval accuracy may drop",
+      {
+        currentChars: guideSize,
+        maxChars: MAX_GUIDE_SIZE,
+        recommendation: "Deprecate old chunks or combine topics",
+      },
     );
-    console.warn(
-      `   Retrieval accuracy may drop as the LLM context window fills up.`,
-    );
-    console.warn(`   Action: Deprecate old chunks or combine topics.`);
   } else {
-    console.log(`   Size:       ${guideSize} chars (Healthy)\n`);
+    logger.info("guide.yaml rebuilt successfully", {
+      totalEntries: entries.length,
+      active,
+      review,
+      deprecated,
+      skipped: skippedTotal,
+      sizeChars: guideSize,
+    });
   }
 }
 
 main().catch((err) => {
-  console.error("❌ Rebuild failed:", err);
+  logger.error("Rebuild failed", {
+    error: err instanceof Error ? err.message : String(err),
+  });
   process.exit(1);
 });

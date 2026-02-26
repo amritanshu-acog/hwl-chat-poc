@@ -15,6 +15,7 @@ import { getModel } from "../providers.js";
 import { cleanJson } from "../llm-client.js";
 import { execSync } from "child_process";
 import { CONFIG } from "../config.js";
+import { logger } from "../logger.js";
 
 const CHUNKS_DIR = CONFIG.paths.chunks;
 
@@ -101,9 +102,9 @@ Example: ["chunk-id-one", "chunk-id-two"]`;
       ? parsed.filter((id: any) => typeof id === "string")
       : [];
   } catch {
-    console.warn(
-      `  ⚠️  Could not parse related chunks response for ${target.chunk_id}`,
-    );
+    logger.warn("Could not parse related chunks response", {
+      chunkId: target.chunk_id,
+    });
     return [];
   }
 }
@@ -129,18 +130,18 @@ function updateRelatedChunks(raw: string, related: string[]): string {
 // ─── Main ──────────────────────────────────────────────────────────────────────
 
 async function main() {
-  console.log("\n🔗 Running post-aggregation related chunks pass...\n");
+  logger.info("Related chunks pass started");
 
   let files: string[];
   try {
     files = (await readdir(CHUNKS_DIR)).filter((f) => f.endsWith(".md"));
   } catch {
-    console.error(`❌ Could not read chunks directory: ${CHUNKS_DIR}`);
+    logger.error("Could not read chunks directory", { dir: CHUNKS_DIR });
     process.exit(1);
   }
 
   if (files.length === 0) {
-    console.warn("⚠️  No chunks found. Run bun run extract first.");
+    logger.warn("No chunks found — run bun run extract first");
     process.exit(0);
   }
 
@@ -154,10 +155,12 @@ async function main() {
 
   // Only process active chunks
   const activeChunks = allChunks.filter((c) => c.status === "active");
-  console.log(`📂 Processing ${activeChunks.length} active chunk(s)...\n`);
+  logger.info("Active chunks loaded for relation pass", {
+    activeChunks: activeChunks.length,
+  });
 
   if (activeChunks.length < 2) {
-    console.log("ℹ️  Need at least 2 active chunks to find relationships.\n");
+    logger.warn("Need at least 2 active chunks to find relationships");
     process.exit(0);
   }
 
@@ -174,28 +177,31 @@ async function main() {
     await writeFile(filePath, updatedContent, "utf-8");
 
     if (related.length > 0) {
-      console.log(`✓ [${related.join(", ")}]`);
+      logger.info("Related chunks written", {
+        chunkId: chunk.chunk_id,
+        related,
+      });
     } else {
-      console.log(`✓ [none]`);
+      logger.debug("No related chunks found", { chunkId: chunk.chunk_id });
     }
 
     updated++;
   }
 
-  console.log(`\n✅ Related chunks written for ${updated} chunk(s)`);
-
-  // Rebuild guide to reflect related_chunks changes
-  console.log(`\n🔨 Rebuilding guide.yaml...\n`);
+  logger.info("Relation pass complete", { totalUpdated: updated });
+  logger.info("Rebuilding guide.yaml after relation pass");
   try {
     execSync("bun run rebuild", { stdio: "inherit" });
   } catch {
-    console.error("❌ Guide rebuild failed. Run bun run rebuild manually.");
+    logger.error("Guide rebuild failed — run bun run rebuild manually");
   }
 
-  console.log("✅ Done.\n");
+  logger.info("Relate pass done");
 }
 
 main().catch((err) => {
-  console.error("❌ Relate pass failed:", err);
+  logger.error("Relate pass failed", {
+    error: err instanceof Error ? err.message : String(err),
+  });
   process.exit(1);
 });

@@ -1,35 +1,35 @@
 {
-  "startedAt": "2026-02-24T13:36:35.665Z",
+  "startedAt": "2026-02-26T11:37:08.118Z",
   "sources": [
-    "/Users/amritanshu/Desktop/AI Chat bot/troubleshooting-poc/HWL Agency_Assignment Agreement V4.pdf"
+    "/Users/amritanshu/Desktop/AI Chat bot/troubleshooting-poc/HWL Agency_Update Email Preferences V2.pdf"
   ],
   "steps": [
     {
       "step": "extract",
       "success": true,
-      "durationMs": 648959,
+      "durationMs": 39794,
       "output": ""
     },
     {
       "step": "validate",
       "success": true,
-      "durationMs": 42541,
+      "durationMs": 9003,
       "output": ""
     },
     {
       "step": "relate",
       "success": true,
-      "durationMs": 36442,
+      "durationMs": 5941,
       "output": ""
     },
     {
       "step": "rebuild",
       "success": true,
-      "durationMs": 86,
+      "durationMs": 273,
       "output": ""
     }
   ],
-  "chunksInKB": 13,
-  "totalDurationMs": 728037,
+  "chunksInKB": 2,
+  "totalDurationMs": 55050,
   "success": true
 }
