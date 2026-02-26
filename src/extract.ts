@@ -247,8 +247,16 @@ async function readPdf(
   filePath: string,
 ): Promise<{ base64: string; buf: Buffer }> {
   logger.info("Reading PDF", { filePath });
-  const buf = await readFile(filePath);
-  return { base64: buf.toString("base64"), buf };
+  try {
+    const buf = await readFile(filePath);
+    return { base64: buf.toString("base64"), buf };
+  } catch (err) {
+    logger.error("Could not read PDF file", {
+      filePath,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    throw err; // re-throw so extractSingle() caller sees a clear log first
+  }
 }
 
 // ─── Extraction strategies ────────────────────────────────────────────────────

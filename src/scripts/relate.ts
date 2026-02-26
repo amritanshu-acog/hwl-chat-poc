@@ -12,7 +12,7 @@ import { readFile, writeFile, readdir } from "fs/promises";
 import { join } from "path";
 import { generateText } from "ai";
 import { getModel } from "../providers.js";
-import { cleanJson } from "../llm-client.js";
+import { cleanJson, callLlmWithRetry } from "../llm-client.js";
 import { execSync } from "child_process";
 import { CONFIG } from "../config.js";
 import { logger } from "../logger.js";
@@ -90,10 +90,18 @@ Rules:
 
 Example: ["chunk-id-one", "chunk-id-two"]`;
 
-  const { text } = await generateText({
-    model: model(),
-    prompt,
-  });
+  let text: string;
+  try {
+    text = (
+      await callLlmWithRetry(() => generateText({ model: model(), prompt }))
+    ).text;
+  } catch (err) {
+    logger.warn("LLM call failed during relate pass (after retry) — skipping", {
+      chunkId: target.chunk_id,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return [];
+  }
 
   try {
     const cleaned = cleanJson(text);
@@ -148,7 +156,16 @@ async function main() {
   // Load all chunk summaries
   const allChunks: ChunkSummary[] = [];
   for (const file of files) {
-    const raw = await readFile(join(CHUNKS_DIR, file), "utf-8");
+    let raw: string;
+    try {
+      raw = await readFile(join(CHUNKS_DIR, file), "utf-8");
+    } catch (err) {
+      logger.error("Could not read chunk file — skipping", {
+        file,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      continue;
+    }
     const summary = parseChunkSummary(raw, file);
     if (summary) allChunks.push(summary);
   }

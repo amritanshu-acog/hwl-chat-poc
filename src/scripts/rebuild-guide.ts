@@ -97,7 +97,17 @@ async function main() {
   let skippedTotal = 0;
 
   for (const file of files.sort()) {
-    const raw = await readFile(join(CHUNKS_DIR, file), "utf-8");
+    let raw: string;
+    try {
+      raw = await readFile(join(CHUNKS_DIR, file), "utf-8");
+    } catch (err) {
+      logger.error("Could not read chunk file — skipping", {
+        file,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      skippedTotal++;
+      continue;
+    }
     const entry = extractFrontMatter(raw, file);
     if (entry) {
       if (entry.status !== "active") {

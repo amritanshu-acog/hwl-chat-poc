@@ -8,12 +8,13 @@
 
 1. [Prerequisites](#1-prerequisites)
 2. [Setup](#2-setup)
-3. [How It Works](#3-how-it-works)
-4. [Features](#4-features)
-5. [Scripts Reference](#5-scripts-reference)
-6. [System Flow](#6-system-flow)
-7. [API Reference](#7-api-reference)
-8. [File Structure](#8-file-structure)
+3. [Environment Variables](#3-environment-variables)
+4. [How It Works](#4-how-it-works)
+5. [Reliability & Production Behaviour](#5-reliability--production-behaviour)
+6. [Scripts Reference](#6-scripts-reference)
+7. [System Flow](#7-system-flow)
+8. [API Reference](#8-api-reference)
+9. [File Structure](#9-file-structure)
 
 ---
 
@@ -30,49 +31,88 @@
 ## 2. Setup
 
 ```bash
-# 1. Copy the environment file
+# 1. Copy environment template
 cp .env.example .env
 
-# 2. Fill in your API credentials in .env
-#    Set AI_PROVIDER to: azure | google | groq
-#    Add the matching API key(s)
+# 2. Edit .env — set AI_PROVIDER and the matching API key(s)
 
 # 3. Install dependencies
 bun install
 
-# 4. Ingest your first PDF into the knowledge base
+# 4. Ingest your first PDF
 bun run ingest ./your-manual.pdf
 
 # 5. Start the API server
 bun run server
-# → Server running at http://localhost:3000
+# → http://localhost:3000
 
 # 6. (Optional) Test via terminal chat
 bun run chat
 ```
 
-### Environment Variables
+---
 
-| Variable                       | Description                                   |
-| ------------------------------ | --------------------------------------------- |
-| `AI_PROVIDER`                  | Active provider: `azure`, `google`, or `groq` |
-| `AZURE_API_KEY`                | Azure OpenAI API key                          |
-| `AZURE_OPENAI_ENDPOINT`        | Azure endpoint URL                            |
-| `AZURE_OPENAI_DEPLOYMENT_NAME` | Model deployment name (e.g. `gpt-4o`)         |
-| `AZURE_OPENAI_RESOURCE_NAME`   | Azure resource name                           |
-| `AZURE_API_VERSION`            | API version (e.g. `2024-12-01-preview`)       |
-| `GOOGLE_GENERATIVE_AI_API_KEY` | Google Gemini API key                         |
-| `GROQ_API_KEY`                 | Groq API key                                  |
+## 3. Environment Variables
+
+All variables below are optional unless marked **required**. Defaults are listed — copy `.env.example` as your starting point.
+
+### AI Provider (required — pick one)
+
+| Variable                       | Description                                                              |
+| ------------------------------ | ------------------------------------------------------------------------ |
+| `AI_PROVIDER`                  | Active provider: `azure`, `google`, or `groq`. Auto-detected if omitted. |
+| `AI_MODEL`                     | Override the model ID (e.g. `gpt-4o`). Uses provider default if omitted. |
+| `GOOGLE_GENERATIVE_AI_API_KEY` | Google Gemini API key                                                    |
+| `GROQ_API_KEY`                 | Groq API key                                                             |
+| `AZURE_API_KEY`                | Azure OpenAI API key                                                     |
+| `AZURE_OPENAI_ENDPOINT`        | Azure endpoint URL                                                       |
+| `AZURE_OPENAI_DEPLOYMENT_NAME` | Model deployment name (e.g. `gpt-4o`)                                    |
+| `AZURE_OPENAI_RESOURCE_NAME`   | Azure resource name                                                      |
+| `AZURE_API_VERSION`            | API version (e.g. `2024-12-01-preview`)                                  |
+
+### Paths
+
+| Variable       | Default         | Description                                                                                                                                                |
+| -------------- | --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PROJECT_ROOT` | `process.cwd()` | Absolute path to the project root. Set this when starting the process from a different working directory (Docker, PM2, etc.). Example: `PROJECT_ROOT=/app` |
+
+### HTTP Server
+
+| Variable             | Default                 | Description                                                                                                  |
+| -------------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `CORS_ORIGIN`        | `http://localhost:5173` | Allowed frontend origin. **Must be changed in production.**                                                  |
+| `MAX_BODY_BYTES`     | `65536` (64 KB)         | Maximum accepted body size for `POST /api/chat`. Requests over this limit return `413`.                      |
+| `REQUEST_TIMEOUT_MS` | `120000` (120 s)        | How long to wait for an LLM response before returning `504`. Prevents connections from hanging indefinitely. |
+
+### Rate Limiting
+
+| Variable               | Default        | Description                                                                                      |
+| ---------------------- | -------------- | ------------------------------------------------------------------------------------------------ |
+| `RATE_LIMIT_WINDOW_MS` | `60000` (60 s) | Sliding-window duration for the per-session request counter.                                     |
+| `RATE_LIMIT_MAX`       | `20`           | Maximum requests per session within the window. Returns `429` with `retryAfterMs` when exceeded. |
+
+### Circuit Breaker
+
+| Variable                    | Default        | Description                                                                     |
+| --------------------------- | -------------- | ------------------------------------------------------------------------------- |
+| `CIRCUIT_BREAKER_THRESHOLD` | `5`            | Number of consecutive LLM failures before the breaker opens (fail-fast mode).   |
+| `CIRCUIT_BREAKER_RESET_MS`  | `60000` (60 s) | How long the breaker stays open before allowing a single probe request through. |
+
+### Logging
+
+| Variable    | Default | Description                                                                                          |
+| ----------- | ------- | ---------------------------------------------------------------------------------------------------- |
+| `LOG_LEVEL` | `info`  | Winston log level: `error` \| `warn` \| `info` \| `debug`. Set `warn` in production to reduce noise. |
 
 ---
 
-## 3. How It Works
+## 4. How It Works
 
 The system operates in two distinct phases:
 
-### Phase 1 — Offline Ingestion (you run this manually)
+### Phase 1 — Offline Ingestion (run manually)
 
-You feed it PDF documents. The extraction strategy is chosen automatically based on file size:
+Feed it PDF documents. The extraction strategy is chosen automatically based on file size:
 
 | Condition                                  | Strategy                                                             |
 | ------------------------------------------ | -------------------------------------------------------------------- |
@@ -80,11 +120,12 @@ You feed it PDF documents. The extraction strategy is chosen automatically based
 | PDF **≥ 4 MB** with a text layer           | Segmented by headings via the chunker — **one LLM call per segment** |
 | PDF **≥ 4 MB**, image-only (no text layer) | Single-shot fallback — full PDF sent to LLM                          |
 
-After extraction, the pipeline:
+The pipeline then runs four steps in sequence:
 
-1. Quality-validates every extracted chunk (structure + LLM clarity gates)
-2. Links related chunks together for better retrieval
-3. Builds a central `guide.yaml` index used at query time
+1. **Extract** — PDF → validated `.md` chunk files with deterministic, content-hash IDs
+2. **Validate** — Zod structural check (instant, no LLM cost) followed by LLM quality scoring
+3. **Relate** — LLM identifies related chunks and writes cross-references
+4. **Rebuild** — Regenerates `data/guide.yaml` from all active chunk front matter
 
 **Output:** Individual `.md` chunk files in `data/chunks/` + a unified `data/guide.yaml` index.
 
@@ -92,103 +133,123 @@ After extraction, the pipeline:
 
 When a user asks a question:
 
-1. **Retrieval** — The guide index is sent to the LLM which selects 2–3 relevant chunk IDs
-2. **Generation** — Those chunk files are loaded and passed as context; the LLM generates a typed JSON response
-3. **Response** — A structured UI-ready envelope is returned with the answer and source citations
+1. **Retrieval** — `guide.yaml` is sent to the LLM, which selects 2–3 relevant chunk IDs
+2. **Generation** — The matching `.md` files are loaded and passed as context; the LLM generates a typed JSON response
+3. **Response** — A structured JSON envelope is returned, ready to render directly in any frontend
 
-**The golden rule:** The AI only reads the knowledge base chunks — it cannot use general world knowledge to answer.
-
----
-
-## 4. Features
-
-### Knowledge Base Management
-
-- **PDF Ingestion** — Ingest one file, multiple files, or an entire directory in one command
-- **Document Type Support** — Standard procedure PDFs and FAQ/Q&A PDFs (via `--type=qna` flag) are handled with separate, tailored prompts
-- **Smart Extraction Strategy** — PDFs under 4 MB are sent to the LLM in a single call. Larger PDFs with a text layer are segmented by headings (via `chunker.ts`) with one LLM call per segment. Chunk IDs are always deterministic — derived from a content hash, not from the LLM
-- **Source Manifest Tracking** — Every chunk is traced back to its originating PDF via `source-manifest.json`
-
-### Quality & Validation
-
-- **Two-Phase Validation** — Phase 1 is an instant Zod schema check (no LLM cost); Phase 2 is an LLM quality gate scoring Clarity, Consistency, and Completeness
-- **Chunk Lifecycle** — Chunks can be `active`, `review` (failed validation), or `deprecated`. Only `active` chunks are used in retrieval
-- **E2E Structural Tests** — 170+ instant checks verify that `guide.yaml` and `data/chunks/` are perfectly in sync (no LLM, runs in seconds)
-- **Retrieval Accuracy Scoring** — Run a gold-standard test set against the retrieval engine to get a percentage accuracy score
-
-### Chat & API
-
-- **Typed Response Envelopes** — The API never returns free text. Responses are one of 8 strict typed formats that a frontend can render directly:
-
-  | Type         | When Used                                        |
-  | ------------ | ------------------------------------------------ |
-  | `steps`      | Step-by-step processes                           |
-  | `choices`    | Disambiguation needed from the user              |
-  | `alert`      | An important warning or constraint               |
-  | `checklist`  | A list of items to complete                      |
-  | `image`      | A screenshot or diagram is referenced            |
-  | `escalation` | No reliable answer; hand off to a support ticket |
-  | `summary`    | Confirmation a task is complete                  |
-  | `text`       | General fallback                                 |
-
-- **Session Management** — Conversation history tracked per `sessionId` with a 30-minute TTL and 20-message cap
-- **Source Citations** — Every response includes `contextChunks` (the exact chunk IDs and source files the AI read)
-- **Escalation-First Design** — When the knowledge base has no relevant chunk, the bot responds with an escalation type, never an invented answer
-- **CLI Debug Mode** — `--debug` flag on the terminal chat shows exactly which chunks were retrieved before the answer is generated
-
-### Developer Tooling
-
-- **Chunk Debug Preview** — Visualise how a PDF is being segmented before running extraction (no LLM cost)
-- **Performance Reports** — Aggregate timing metrics across ingestion runs
-- **Winston Structured Logging** — All pipeline steps emit JSON-structured logs compatible with ELK / logging platforms
+> **The golden rule:** The AI only reads knowledge base chunks — it cannot use general world knowledge to answer. If no relevant chunk exists, the bot returns an `escalation` response.
 
 ---
 
-## 5. Scripts Reference
+## 5. Reliability & Production Behaviour
 
-All commands use `bun run <name>`. Run from the project root.
+### LLM Error Handling
+
+Every LLM call is classified before deciding how to respond:
+
+| Error Type    | Detection                               | Behaviour                                                    |
+| ------------- | --------------------------------------- | ------------------------------------------------------------ |
+| `auth`        | HTTP 401/403, "unauthorized" in msg     | **Abort immediately** — no retries. Check `AI_PROVIDER` key. |
+| `rate_limit`  | HTTP 429, "quota" / "too many requests" | Retry with **exponential backoff + jitter**                  |
+| `token_limit` | "context length", HTTP 413              | **Abort immediately** — segment too large, truncation needed |
+| `transient`   | HTTP 5xx                                | Retry with exponential backoff + jitter                      |
+| `unknown`     | anything else                           | Retry with backoff                                           |
+
+**Retry backoff:** Base 1s, doubles each attempt, capped at 30s. ±20% random jitter prevents thundering herd when multiple parallel extractions all hit a rate limit simultaneously. Configured via `retryBaseDelayMs`, `retryMaxDelayMs`, and `retryJitter` in `config.ts`.
+
+### Circuit Breaker
+
+Protects the server from hanging when the LLM provider goes down:
+
+```
+Normal → [CLOSED] — all calls pass through
+5 consecutive failures → [OPEN] — all calls fail immediately with a clear error
+After 60s → [HALF_OPEN] — one probe allowed
+Probe succeeds → [CLOSED] again
+Probe fails → [OPEN] again, timer resets
+```
+
+Thresholds are configurable via `CIRCUIT_BREAKER_THRESHOLD` and `CIRCUIT_BREAKER_RESET_MS`. The current state is exposed in `/api/health`.
+
+### Request Lifecycle (server.ts)
+
+Every `/api/chat` request goes through these guards in order:
+
+1. **Body size check** — rejects oversized payloads before parsing (returns `413`)
+2. **Rate limit check** — sliding-window per `sessionId` (returns `429` with `retryAfterMs`)
+3. **Request timeout race** — `AbortSignal` races the LLM pipeline; slow responses return `504` instead of hanging
+4. **LLM call** — routed through the circuit breaker; classified errors return user-readable `alert` responses
+5. **Fire-and-forget log** — writes to `data/logs/requests.ndjson` without delaying the response
+
+### Request Correlation
+
+Every `/api/chat` request gets a short random `reqId`. It appears in:
+
+- Every Winston log line emitted during that request (via `AsyncLocalStorage`)
+- The `X-Request-Id` response header — clients can include this in bug reports
+- Error response bodies (`504`, `500`) for easy grep in logs
+
+```bash
+# Find all logs for a single request:
+grep "a4f2bc9e" data/logs/requests.ndjson
+```
+
+### Graceful Shutdown
+
+The server handles `SIGTERM` (Docker stop, PM2 reload) and `SIGINT` (Ctrl+C) gracefully:
+
+- Allows up to 5 seconds for in-flight requests to complete
+- Then exits cleanly so the process manager can restart without orphan processes
+
+### Session Cleanup
+
+Sessions expire after 30 minutes of inactivity. A background `setInterval` (every 5 minutes) evicts stale sessions regardless of traffic levels — memory does not grow indefinitely.
+
+---
+
+## 6. Scripts Reference
+
+All commands run from the project root with `bun run <name>`.
 
 ### Primary Workflows
 
 | Command                            | Description                                                                                      |
 | ---------------------------------- | ------------------------------------------------------------------------------------------------ |
 | `bun run ingest <path>`            | **Full pipeline.** Runs extract → validate → relate → rebuild in sequence. Use for all new PDFs. |
-| `bun run ingest --type=qna <path>` | Same as above but uses the FAQ/Q&A extraction prompt instead of the standard procedure prompt.   |
-| `bun run server`                   | Starts the HTTP API on `localhost:3000`.                                                         |
+| `bun run ingest --type=qna <path>` | Same as above but uses the FAQ/Q&A extraction prompt.                                            |
+| `bun run server`                   | Starts the HTTP API on `http://localhost:3000`.                                                  |
 | `bun run chat`                     | Interactive terminal chat. No server required.                                                   |
-| `bun run chat --debug`             | Terminal chat with evidence box — prints which chunks the AI retrieved before answering.         |
+| `bun run chat --debug`             | Terminal chat with evidence box — prints the exact chunks retrieved before each answer.          |
 
-### Ingestion Pipeline (Individual Steps)
+### Ingestion Pipeline Steps (run individually if needed)
 
-> Only needed if you want to run ingestion steps separately, instead of using `bun run ingest`.
+> Use `bun run ingest` instead unless you need to re-run a specific step.
 
-| Command                             | Step | Description                                                                                                                                                                              |
-| ----------------------------------- | ---- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `bun run extract <path>`            | 1/4  | Reads PDF. PDFs < 4 MB go directly to the LLM in one call. PDFs ≥ 4 MB are segmented by headings first (one LLM call per segment). Writes `.md` chunks + updates `source-manifest.json`. |
-| `bun run extract --type=qna <path>` | 1/4  | Same strategy as above, but uses the Q&A extraction prompt.                                                                                                                              |
-| `bun run validate`                  | 2/4  | Two-phase quality check: Zod structure pass then LLM clarity/completeness scoring.                                                                                                       |
-| `bun run relate`                    | 3/4  | LLM pass to populate `related_chunks` fields across the knowledge base.                                                                                                                  |
-| `bun run rebuild`                   | 4/4  | Regenerates `guide.yaml` from all active chunk front-matter. Run after any manual chunk edits.                                                                                           |
+| Command                             | Step | Description                                                                                              |
+| ----------------------------------- | ---- | -------------------------------------------------------------------------------------------------------- |
+| `bun run extract <path>`            | 1/4  | PDF → chunk `.md` files. Small PDFs go directly to LLM; large PDFs are segmented by headings first.      |
+| `bun run extract --type=qna <path>` | 1/4  | Same strategy using the Q&A/FAQ extraction prompt.                                                       |
+| `bun run validate`                  | 2/4  | Phase 1: instant Zod structure check. Phase 2: LLM quality scoring (Clarity, Consistency, Completeness). |
+| `bun run relate`                    | 3/4  | LLM pass to populate `related_chunks` fields across the knowledge base.                                  |
+| `bun run rebuild`                   | 4/4  | Regenerates `guide.yaml` from all active chunk front matter. Run after any manual chunk edits.           |
 
 ### Testing & Evaluation
 
-| Command                  | Description                                                                                                                       |
-| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
-| `bun run e2e-test`       | 170+ structural integrity checks. Verifies `guide.yaml` ↔ `data/chunks/` alignment, schema, and required sections. Zero LLM cost. |
-| `bun run score`          | Runs retrieval accuracy evaluation against `data/test-queries.json`. Outputs a percentage score.                                  |
-| `bun run validate-guide` | Fast Zod-only structural check on `guide.yaml` alone.                                                                             |
+| Command            | Description                                                                                                                                   |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bun run e2e-test` | Structural integrity checks. Verifies `guide.yaml` ↔ `data/chunks/` alignment, schema, required sections. Zero LLM cost.                      |
+| `bun run score`    | Runs retrieval accuracy evaluation against `data/test-queries.json`. Outputs a percentage accuracy score. Requires a gold-standard query set. |
 
 ### Utilities & Maintenance
 
-| Command                     | Description                                                                                                       |
-| --------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `bun run chunk <pdf>`       | Debug tool. Segments a PDF and saves each block as a `.txt` file to `data/debug-chunks/` without calling the LLM. |
-| `bun run perf-report`       | Aggregates timing metrics from historical ingestion runs in `data/reports/`.                                      |
-| `bun run delete <chunk_id>` | Removes a chunk's `.md` file and strips it from `guide.yaml`.                                                     |
+| Command                     | Description                                                                                                                                                       |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bun run chunk <pdf>`       | Debug tool. Segments a PDF and saves each block as a `.txt` file to `data/debug-chunks/` — shows exactly what text the LLM will see, without making any LLM call. |
+| `bun run delete <chunk_id>` | Safely removes a chunk's `.md` file and re-syncs `guide.yaml`. Never delete chunks manually.                                                                      |
 
 ---
 
-## 6. System Flow
+## 7. System Flow
 
 ### Offline — Ingestion Pipeline
 
@@ -198,17 +259,17 @@ flowchart TD
 
     B --> C{PDF size?}
 
-    C -->|"< 4 MB"| D["Single-shot extraction\nFull PDF sent to LLM in one call"]
-    C -->|">= 4 MB + text layer"| E["chunker.ts\nDecode PDF text via pdf-parse\nsegmentDocument: split by headings\nSave segments to temp/<type>/\nOne LLM call per segment"]
-    C -->|">= 4 MB, image-only"| F["Single-shot fallback\nFull PDF sent to LLM"]
+    C -->|"< 4 MB"| D["Single-shot\nFull PDF → LLM in one call"]
+    C -->|">= 4 MB + text layer"| E["chunker.ts\npdf-parse → plain text\nsegmentDocument: split by headings\nSave segments → temp/<type>/\nOne LLM call per segment"]
+    C -->|">= 4 MB, image-only"| F["Single-shot fallback\nFull PDF → LLM"]
 
-    D --> G["LLM returns chunk JSON\nZod-validated → Stable IDs derived\ndata/chunks/<id>.md written\nguide.yaml updated\nsource-manifest.json updated"]
+    D --> G["LLM returns chunk JSON\nZod-validated\nStable IDs derived from content hash\ndata/chunks/<id>.md written\nguide.yaml + source-manifest.json updated"]
     E --> G
     F --> G
 
-    G --> H["[2] validate.ts\nPhase 1: Zod structural check — instant, no LLM\nPhase 2: LLM rates Clarity, Consistency, Completeness\nFailed chunks → status: review"]
+    G --> H["[2] validate.ts\nPhase 1: Zod structural check (no LLM)\nPhase 2: LLM quality gate\n→ Clarity / Consistency / Completeness\nFailed chunks tagged status: review"]
 
-    H --> I["[3] relate.ts\nLLM identifies related chunks\nWrites related_chunks into front matter"]
+    H --> I["[3] relate.ts\nLLM identifies related chunks\nWrites related_chunks into front matter\n1-retry with circuit breaker"]
 
     I --> J["[4] rebuild-guide.ts\nReads all active chunk front matter\nWrites unified data/guide.yaml"]
 
@@ -219,13 +280,17 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    A(["POST /api/chat\n{ message, sessionId, mode }"]) --> B["server.ts\nLoad session history — 30-min TTL\n20-message cap"]
+    A(["POST /api/chat\n{ message, sessionId, mode }"]) --> G1["server.ts\nBody size guard → 413 if oversized\nRate limit guard → 429 if exceeded\nReqId generated for log correlation"]
 
-    B --> C["llm-client.ts"]
+    G1 --> B["Session loaded\n30-min TTL · 20-message cap"]
 
-    C --> D["Step 1 — RETRIEVAL\nLoad data/guide.yaml\nSend guide + question to LLM\nLLM returns 2–3 chunk_ids"]
+    B --> CB["Circuit breaker check\nOPEN → immediate 503\nCLOSED / HALF_OPEN → proceed"]
 
-    D --> E["Step 2 — GENERATION\nLoad matching data/chunks/<id>.md files\nSend chunks + question to LLM\nLLM returns typed JSON envelope"]
+    CB --> C["llm-client.ts"]
+
+    C --> D["Step 1 — RETRIEVAL\nLoad data/guide.yaml\nSend guide + question to LLM\nLLM returns 2-3 chunk_ids"]
+
+    D --> E["Step 2 — GENERATION\nLoad matching data/chunks/<id>.md\nSend chunks + question to LLM\nLLM returns typed JSON envelope"]
 
     E --> F{Response type}
 
@@ -236,40 +301,47 @@ flowchart TD
     F --> escalation["escalation"]
     F --> text["text / summary / image"]
 
-    steps & choices & alert & checklist & escalation & text --> G(["{ response: { type, data }, contextChunks: [...] }"])
+    steps & choices & alert & checklist & escalation & text --> G(["{ response: {type, data}, contextChunks, X-Request-Id header }"])
 ```
 
 ### Input Directories for Ingestion
 
-Place source PDFs in the appropriate folder under `docs/` before running `bun run ingest`:
-
-| Folder            | Document Type                          |
-| ----------------- | -------------------------------------- |
-| `docs/procedure/` | Step-by-step user manuals and SOPs     |
-| `docs/qna/`       | FAQ sheets and Q&A format documents    |
-| `docs/chat/`      | Chat log or conversation data (future) |
+| Folder            | Document Type                         | Command                                 |
+| ----------------- | ------------------------------------- | --------------------------------------- |
+| `docs/procedure/` | Step-by-step user manuals and SOPs    | `bun run ingest docs/procedure/`        |
+| `docs/qna/`       | FAQ sheets and Q&A format documents   | `bun run ingest --type=qna docs/qna/`   |
+| `docs/chat/`      | Chat log / conversation data (future) | `bun run ingest --type=chat docs/chat/` |
 
 ---
 
-## 7. API Reference
+## 8. API Reference
 
 ### `GET /api/health`
 
-Returns server status and the current number of active chunks in the knowledge base.
+Returns server status, active chunk count, and circuit breaker state.
 
 ```json
-{ "status": "ok", "activeChunks": 21 }
+{ "status": "ok", "chunksLoaded": 21 }
 ```
+
+Use this endpoint in your load balancer or uptime monitor health checks.
 
 ### `GET /api/chunks`
 
-Returns a list of all chunks from `guide.yaml`.
+Returns all chunks from `guide.yaml` (`chunk_id`, `topic`, `summary`, `status`).
 
 ### `POST /api/chat`
 
 Main question-answering endpoint.
 
-**Request:**
+**Request headers:**
+
+| Header           | Description                                |
+| ---------------- | ------------------------------------------ |
+| `Content-Type`   | `application/json` (required)              |
+| `Content-Length` | Must be ≤ `MAX_BODY_BYTES` (64 KB default) |
+
+**Request body:**
 
 ```json
 {
@@ -279,13 +351,13 @@ Main question-answering endpoint.
 }
 ```
 
-| Field       | Required | Description                                                      |
-| ----------- | -------- | ---------------------------------------------------------------- |
-| `message`   | ✅       | The user's question                                              |
-| `sessionId` | ✅       | Unique session identifier for conversation history               |
-| `mode`      | ❌       | `answer` (default) or `clarify` (prefers disambiguation choices) |
+| Field       | Required | Description                                                                            |
+| ----------- | -------- | -------------------------------------------------------------------------------------- |
+| `message`   | ✅       | The user's question                                                                    |
+| `sessionId` | ✅       | Unique identifier for this conversation (tracks history)                               |
+| `mode`      | ❌       | `answer` (default — go straight to steps) or `clarify` (prefer disambiguation choices) |
 
-**Response:**
+**Success response (`200`):**
 
 ```json
 {
@@ -293,18 +365,44 @@ Main question-answering endpoint.
     "type": "steps",
     "data": {
       "title": "How to Submit a Timecard",
-      "steps": ["Step 1: ...", "Step 2: ..."]
+      "steps": [{ "title": "Step 1", "body": "..." }]
     }
   },
   "contextChunks": [
     {
-      "chunk_id": "timecard-invoices-process",
+      "chunk_id": "timecard-invoices-process-a1b2c3d4",
       "topic": "Timecard Submission",
+      "summary": "...",
       "file": "HWL Agency Manual.pdf"
     }
   ]
 }
 ```
+
+**Response header:** `X-Request-Id: a4f2bc9e` — use this ID when reporting bugs.
+
+**Error responses:**
+
+| Status | Code      | Cause                                                 |
+| ------ | --------- | ----------------------------------------------------- |
+| `400`  | —         | `message` or `sessionId` missing                      |
+| `413`  | —         | Request body exceeds `MAX_BODY_BYTES`                 |
+| `429`  | —         | Rate limit exceeded; response includes `retryAfterMs` |
+| `504`  | `TIMEOUT` | LLM did not respond within `REQUEST_TIMEOUT_MS`       |
+| `500`  | —         | Unexpected internal error; `reqId` included in body   |
+
+**Response types:**
+
+| Type         | When Used                                        |
+| ------------ | ------------------------------------------------ |
+| `steps`      | Step-by-step processes                           |
+| `choices`    | Disambiguation needed from the user              |
+| `alert`      | An important warning or constraint               |
+| `checklist`  | A list of items to complete                      |
+| `image`      | A screenshot or diagram is referenced            |
+| `escalation` | No reliable answer; hand off to a support ticket |
+| `summary`    | Confirmation a task is complete                  |
+| `text`       | General fallback                                 |
 
 **Test with curl:**
 
@@ -316,65 +414,71 @@ curl -X POST http://localhost:3000/api/chat \
 
 ---
 
-## 8. File Structure
+## 9. File Structure
 
 ```
-hwl-chat-poc/
+troubleshooting-poc/
 │
 ├── data/
-│   ├── guide.yaml              ← Central retrieval index (auto-generated)
+│   ├── guide.yaml              ← Central retrieval index (auto-generated — do not edit)
 │   ├── chunks/                 ← One .md file per knowledge chunk
 │   ├── test-queries.json       ← Gold-standard test set for accuracy scoring
-│   ├── logs/requests.ndjson   ← Per-request structured logs
-│   └── reports/               ← Ingestion performance reports
+│   ├── logs/requests.ndjson    ← Per-request NDJSON structured logs (ELK-compatible)
+│   └── reports/                ← Ingestion performance reports (JSON)
 │
 ├── docs/
 │   ├── procedure/              ← Drop procedure PDFs here
-│   ├── qna/                   ← Drop FAQ PDFs here
-│   └── chat/                  ← Chat logs (future use)
+│   ├── qna/                    ← Drop FAQ PDFs here
+│   └── chat/                   ← Chat exports (future use)
+│
+├── temp/                       ← Intermediate text segments from chunker (auto-cleaned)
+│   ├── procedure/
+│   ├── qna/
+│   └── chat/
+│
+├── logs/
+│   └── app.log                 ← Winston structured log (10 MB rolling, 5 files max)
 │
 ├── src/
-│   ├── server.ts              ← Hono HTTP API (port 3000)
-│   ├── main.ts                ← Interactive CLI chat
-│   ├── extract.ts             ← PDF → chunk extraction orchestrator
-│   ├── llm-client.ts          ← All LLM calls (retrieval + generation)
-│   ├── chunker.ts             ← Deterministic PDF segmentation engine
-│   ├── schemas.ts             ← Zod schemas for chunks, guide, responses
-│   ├── providers.ts           ← LLM provider registry (Azure/Google/Groq)
-│   ├── config.ts              ← Centralised pipeline configuration
+│   ├── server.ts               ← Hono HTTP API (port 3000) — rate limiting, timeout, graceful shutdown
+│   ├── main.ts                 ← Interactive CLI chat
+│   ├── extract.ts              ← PDF → chunk extraction orchestrator
+│   ├── llm-client.ts           ← All LLM calls — circuit breaker, error classification, backoff
+│   ├── chunker.ts              ← Deterministic PDF segmentation engine (heading-based)
+│   ├── schemas.ts              ← Zod schemas (chunks, guide entries, chat responses)
+│   ├── providers.ts            ← LLM provider registry (Azure / Google / Groq)
+│   ├── config.ts               ← All configurable values — edit here or override via env vars
+│   ├── logger.ts               ← Winston logger with AsyncLocalStorage request correlation
+│   ├── prompt-loader.ts        ← Loads .md prompt files from src/prompts/
 │   │
 │   ├── prompts/
-│   │   ├── extraction.md      ← System prompt for procedure PDF extraction
-│   │   ├── qna-extraction.md  ← System prompt for FAQ/Q&A PDF extraction
-│   │   └── chat.md            ← System prompt for answer generation
+│   │   ├── extraction.md       ← System prompt: procedure PDF extraction
+│   │   ├── qna-extraction.md   ← System prompt: FAQ/Q&A PDF extraction
+│   │   ├── chat-extraction.md  ← System prompt: chat log extraction (future)
+│   │   └── chat.md             ← System prompt: answer generation
 │   │
 │   └── scripts/
-│       ├── ingest.ts          ← Full pipeline orchestrator
-│       ├── validate.ts        ← Two-phase chunk quality validation
-│       ├── relate.ts          ← Related chunk graph generation
-│       ├── rebuild-guide.ts   ← guide.yaml regeneration
-│       ├── validate-guide.ts  ← guide.yaml structural check
-│       ├── eval-retrieval.ts  ← Retrieval accuracy scoring
-│       ├── e2e-test.ts        ← Structural regression tests
-│       ├── chunk-debug.ts     ← PDF segmentation preview tool
-│       ├── perf-report.ts     ← Ingestion performance analytics
-│       ├── source-manifest.ts ← PDF → chunk provenance tracking
-│       └── delete.ts          ← Safe chunk removal
+│       ├── ingest.ts           ← Full pipeline orchestrator (extract → validate → relate → rebuild)
+│       ├── validate.ts         ← Two-phase chunk quality validation
+│       ├── relate.ts           ← Related chunk cross-referencing
+│       ├── rebuild-guide.ts    ← guide.yaml regeneration from chunk front matter
+│       ├── source-manifest.ts  ← PDF → chunk provenance tracking helpers
+│       ├── eval-retrieval.ts   ← Retrieval accuracy scoring against a gold query set
+│       ├── e2e-test.ts         ← Structural regression tests (no LLM)
+│       ├── chunk-debug.ts      ← PDF segmentation preview (shows exact LLM input, no LLM call)
+│       └── delete.ts           ← Safe chunk removal + guide.yaml re-sync
 │
-├── source-manifest.json        ← Maps PDFs to the chunk IDs they produced
-├── .env.example               ← Copy to .env and fill in your API keys
-├── package.json               ← All runnable scripts
-├── README.md                  ← Quick start (one page)
-├── GUIDE.md                   ← This file
-├── HELP.md                    ← Deep-dive technical documentation
-├── scripts.md                 ← Scripts quick reference
-└── flow.md                    ← Pipeline architecture diagram
+├── source-manifest.json        ← Maps source PDFs to the chunk IDs they produced
+├── .env                        ← Your local secrets (never commit)
+├── .env.example                ← All supported environment variables with defaults
+├── package.json                ← All runnable bun scripts
+└── GUIDE.md                    ← This file
 ```
 
 ---
 
 > **Further Reading**
 >
-> - `HELP.md` — Deep technical documentation with full expected outputs for every command
+> - `HELP.md` — Deep technical documentation with expected outputs for every command
 > - `scripts.md` — Compact scripts quick-reference card
 > - `flow.md` — Step-by-step pipeline architecture with LLM call counts

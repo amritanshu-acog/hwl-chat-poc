@@ -66,14 +66,14 @@ Each object must have ALL of these fields:
     "error message text if any was mentioned"
   ],
   "has_conditions": "boolean — true if the fix differs depending on user role or account state",
-  "conditions": "string | null — describe conditions IF has_conditions is true, else omit",
+  "conditions": "string — describe conditions IF has_conditions is true, else omit this field entirely",
   "escalation": "string | null — if this issue type consistently required human escalation, describe when",
   "related_chunks": [],
   "status": "active",
   "context": "string — what is the recurring situation? What system feature or workflow was involved? What was the customer trying to do?",
   "response": "string — the resolution. Step-by-step if procedural. Written as if coaching a support agent or the customer directly. Include any workarounds that came up in real conversations.",
   "escalation_detail": "string — 'None required.' or specific guidance on when to escalate this issue type based on conversation patterns.",
-  "constraints": "string | null — any hard limits discovered in conversations (e.g. 'Cannot be edited after 48 hours') — omit if none"
+  "constraints": "string — any hard limits discovered in conversations (e.g. 'Cannot be edited after 48 hours') — omit this field entirely if none"
 }
 ```
 

@@ -39,34 +39,38 @@ troubleshooting-poc/
 │
 ├── src/
 │   ├── extract.ts          ← Reads PDFs, calls LLM, writes chunk .md files + guide.yaml
-│   ├── llm-client.ts       ← Wraps all LLM calls (extraction + chat retrieval + generation)
-│   ├── server.ts           ← Hono HTTP API server (POST /api/chat, GET /api/health)
+│   ├── llm-client.ts       ← All LLM calls — circuit breaker, error classification, backoff
+│   ├── server.ts           ← Hono HTTP API — rate limiting, timeout, graceful shutdown
 │   ├── main.ts             ← Interactive CLI chat (type questions in terminal)
-│   ├── config.ts           ← NEW: Centralized pipeline configuration (sizes, paths)
+│   ├── config.ts           ← Centralized pipeline + server configuration (all env var defaults)
 │   ├── schemas.ts          ← Zod type definitions for chunks, guide entries, LLM output
-│   ├── providers.ts        ← Provider registry (OpenAI / Azure / Google / Groq)
-│   ├── chunker.ts          ← NEW: Deterministic document boundary engine
+│   ├── providers.ts        ← Provider registry (Azure / Google / Groq)
+│   ├── chunker.ts          ← Deterministic heading-based document segmentation engine
+│   ├── logger.ts           ← Winston logger with AsyncLocalStorage request correlation
 │   │
 │   ├── prompts/
-│   │   ├── extraction.md   ← System prompt for extracting procedure PDFs
-│   │   ├── qna-extraction.md  ← NEW: System prompt for FAQ/Q&A PDFs
-│   │   └── chat.md         ← System prompt for answering user questions
+│   │   ├── extraction.md      ← System prompt for procedure PDFs
+│   │   ├── qna-extraction.md  ← System prompt for FAQ/Q&A PDFs
+│   │   ├── chat-extraction.md ← System prompt for chat log extraction (future)
+│   │   └── chat.md            ← System prompt for answering user questions
 │   │
 │   └── scripts/
-│       ├── ingest.ts       ← NEW: Full pipeline orchestrator (extract+validate+relate+rebuild)
-│       ├── validate.ts     ← Quality check chunks (Zod structure + LLM clarity/completeness)
-│       ├── relate.ts       ← Find related chunks and wire them together
-│       ├── rebuild-guide.ts ← Rebuild guide.yaml targeting active chunks
-│       ├── validate-guide.ts ← NEW: Verify guide.yaml structure with Zod
-│       ├── perf-report.ts  ← NEW: Analyzes and calculates metrics from ingestion reports
-│       ├── e2e-test.ts     ← NEW: Structural tests (no LLM, runs in seconds)
-│       ├── eval-retrieval.ts  ← NEW: Retrieval accuracy evaluation script (runs test queries)
-│       ├── source-manifest.ts ← NEW: Track which PDF produced which chunks
-│       └── delete.ts       ← Remove a chunk from the KB
+│       ├── ingest.ts          ← Full pipeline orchestrator (extract → validate → relate → rebuild)
+│       ├── validate.ts        ← Quality check: Zod structure + LLM Clarity/Consistency/Completeness
+│       ├── relate.ts          ← Find related chunks and wire them together
+│       ├── rebuild-guide.ts   ← Rebuild guide.yaml from active chunk front matter
+│       ├── validate-guide.ts  ← Fast Zod-only check on guide.yaml structure
+│       ├── perf-report.ts     ← Aggregate timing metrics from ingestion reports
+│       ├── e2e-test.ts        ← Structural regression tests (no LLM, runs in seconds)
+│       ├── eval-retrieval.ts  ← Retrieval accuracy evaluation (requires test-queries.json)
+│       ├── source-manifest.ts ← Track which PDF produced which chunks
+│       ├── chunk-debug.ts     ← PDF segmentation preview (no LLM)
+│       └── delete.ts          ← Remove a chunk from the KB and resync guide.yaml
 │
-├── source-manifest.json    ← NEW: Created at runtime. Maps PDF → chunk_ids + hash
+├── source-manifest.json    ← Created at runtime. Maps PDF → chunk_ids + hash
 ├── package.json            ← All runnable commands are here
 ├── .env                    ← Your API keys (copy from .env.example)
+├── .env.example            ← All supported environment variables with defaults
 └── HELP.md                 ← This file
 ```
 
@@ -189,8 +193,8 @@ Next steps:
 
 **What it does:** Two-phase quality check on all active chunks.
 
-- **Phase 1 (instant, no LLM):** Checks that each `.md` file has valid YAML front matter, required fields, and required sections (`## Context`, `## Response`, `## Escalation`). Marks bad chunks `status: review` immediately.
-- **Phase 2 (LLM):** Checks Clarity, Consistency, and Completeness of each structurally valid chunk.
+- **Phase 1 (instant, no LLM):** Checks that each `.md` file has valid YAML front matter, all required fields (`chunk_id`, `topic`, `summary`, `triggers`, etc.), and the required markdown sections (`## Context`, `## Response`, `## Escalation`). Marks bad chunks `status: review` immediately — no LLM call wasted.
+- **Phase 2 (LLM):** Checks **Clarity**, **Consistency**, and **Completeness** of each structurally valid chunk. Uses `callLlmWithRetry` — one automatic retry on transient errors before marking for review.
 
 ```bash
 bun run validate
@@ -403,11 +407,21 @@ bun run server
 **Expected output:**
 
 ```
-🚀 HWL Assistant server running on http://localhost:3000
+🚀 Server ready — 21 chunks in guide.yaml
 
-Routes:
-  POST /api/chat    — Ask a question
-  GET  /api/health  — Check server status
+🌐 Listening on http://localhost:3000
+📝 Logging to data/logs/requests.ndjson
+🔒 CORS origin: http://localhost:5173
+⏱  Request timeout: 120s
+🚦 Rate limit: 20 req / 60s per session
+```
+
+**Routes:**
+
+```
+GET  /api/health   — server status and chunk count
+GET  /api/chunks   — list all chunks from guide.yaml
+POST /api/chat     — question-answering endpoint
 ```
 
 **Test it:**
@@ -425,16 +439,25 @@ curl -X POST http://localhost:3000/api/chat \
 **Chat response shape:**
 
 ```json
-[
-  {
+{
+  "response": {
     "type": "steps",
     "data": {
       "title": "How to submit a timecard",
-      "steps": ["Step 1: ...", "Step 2: ..."]
+      "steps": [{ "title": "Step 1", "body": "..." }]
     }
-  }
-]
+  },
+  "contextChunks": [
+    {
+      "chunk_id": "timecard-invoices-process-a1b2c3d4",
+      "topic": "Timecard Submission",
+      "file": "HWL Agency Manual.pdf"
+    }
+  ]
+}
 ```
+
+The `X-Request-Id` response header carries a short ID that correlates all server logs for this request.
 
 ---
 
@@ -520,7 +543,7 @@ Full details saved to: data/reports/eval-report-2026-02-24T...
 
 ---
 
-## What I Assumed About How Things Work
+## Design Principles
 
 1. **The LLM decides the knowledge, not the developer.** You give it a PDF and it extracts what it thinks is important. You don't write the chunks by hand.
 
@@ -528,40 +551,11 @@ Full details saved to: data/reports/eval-report-2026-02-24T...
 
 3. **Chunks are self-contained.** A user reading one chunk must be able to understand it completely without reading any other chunk. This is enforced by the extraction prompt.
 
-4. **The system only knows what's in the PDFs.** If a user asks about something not in any chunk, the bot says it doesn't know. This is by design.
+4. **The system only knows what's in the PDFs.** If a user asks about something not in any chunk, the bot returns an escalation response. It never invents an answer.
 
-5. **Q&A format PDFs are different from procedure PDFs.** Procedure PDFs = how-to guides and step-by-step instructions. Q&A PDFs = FAQ documents with questions and answers. You can now use the `--type=qna` flag during extraction (`bun run extract --type=qna <doc>`) to apply the specialized Q&A extraction prompt. Otherwise, it defaults to the standard procedure logic.
+5. **Q&A format PDFs are different from procedure PDFs.** Procedure PDFs = how-to guides and step-by-step instructions. Q&A PDFs = FAQ documents. Use `--type=qna` during extraction to apply the specialized prompt.
 
----
-
-## What Was Built During Drop 1 (this session)
-
-Everything below is **new** — it did not exist before:
-
-| File                             | What it does                                                                                                                       |
-| -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| `src/chunker.ts`                 | Deterministic document segmenter — splits documents by headings before calling the LLM, so chunk boundaries are stable across runs |
-| `src/scripts/ingest.ts`          | One-command pipeline: `bun run ingest` runs extract → validate → relate → rebuild                                                  |
-| `src/scripts/validate-guide.ts`  | `bun run validate-guide` — fast Zod check on guide.yaml                                                                            |
-| `src/scripts/e2e-test.ts`        | `bun run e2e-test` — 172 structural checks, no LLM, runs in seconds                                                                |
-| `src/scripts/source-manifest.ts` | Tracks which PDF produced which chunks (for deduplication and provenance)                                                          |
-| `src/scripts/eval-retrieval.ts`  | Automates testing against `data/test-queries.json` to prove retrieval accuracy on the Pilot dataset                                |
-| `src/prompts/qna-extraction.md`  | Extraction prompt for FAQ/Q&A format documents                                                                                     |
-| `data/test-queries.json`         | "Gold Standard" test queries and expected chunks for evaluating accuracy                                                           |
-| `HELP.md`                        | This file                                                                                                                          |
-
-**Modified existing files:**
-
-| File                           | What changed                                                                                        |
-| ------------------------------ | --------------------------------------------------------------------------------------------------- |
-| `src/extract.ts`               | + source-manifest wiring, + perf timing, + structured summary report, + context-window size warning |
-| `src/llm-client.ts`            | + `console.time` around both LLM calls (retrieval + generation)                                     |
-| `src/scripts/validate.ts`      | + Phase 1 Zod structural check before LLM calls                                                     |
-| `src/scripts/rebuild-guide.ts` | + imports GuideEntry from schemas.ts (removed duplicate), + strips `chunk_id:` prefixes             |
-| `src/scripts/relate.ts`        | + strips `chunk_id:` prefixes when writing related_chunks                                           |
-| `src/prompts/extraction.md`    | + 6 new edge case rules for short/long/nested/shared procedures                                     |
-| `package.json`                 | + `ingest`, `validate-guide`, `e2e-test` scripts; fixed broken `test` script                        |
-| `README.md`                    | + Full command reference, ingestion workflow checklist, env variable table, troubleshooting section |
+6. **Reliability is layered.** Every LLM call goes through the circuit breaker → classified error → exponential backoff + jitter. File reads in pipeline loops are individually guarded. The server rate-limits, enforces a body size cap, and times out hangs.
 
 ---
 
@@ -570,7 +564,7 @@ Everything below is **new** — it did not exist before:
 ```bash
 # 1. Copy env file and fill in your API key
 cp .env.example .env
-# Edit .env: set AI_PROVIDER=openai and OPENAI_API_KEY=sk-...
+# Edit .env: set AI_PROVIDER=google (or azure/groq) and the matching API key
 
 # 2. Install dependencies
 bun install

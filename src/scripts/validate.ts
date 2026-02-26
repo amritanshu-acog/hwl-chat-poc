@@ -20,7 +20,7 @@ import { readFile, writeFile, readdir } from "fs/promises";
 import { join } from "path";
 import { generateText } from "ai";
 import { getModel } from "../providers.js";
-import { cleanJson } from "../llm-client.js";
+import { cleanJson, callLlmWithRetry } from "../llm-client.js";
 import { execSync } from "child_process";
 import { ChunkFrontMatterSchema } from "../schemas.js";
 import { ZodError } from "zod";
@@ -70,10 +70,26 @@ Return ONLY this JSON:
   "completeness": { "pass": true | false, "reason": "one sentence" }
 }`;
 
-  const { text } = await generateText({
-    model: model(),
-    prompt,
-  });
+  let text: string;
+  try {
+    text = (
+      await callLlmWithRetry(() => generateText({ model: model(), prompt }))
+    ).text;
+  } catch (err) {
+    logger.warn(
+      "LLM call failed during validation (after retry) — marking for review",
+      {
+        chunkId,
+        error: err instanceof Error ? err.message : String(err),
+      },
+    );
+    return {
+      passed: false,
+      clarity: { pass: false, reason: "LLM call failed — could not evaluate" },
+      consistency: { pass: true, reason: "" },
+      completeness: { pass: true, reason: "" },
+    };
+  }
 
   try {
     const cleaned = cleanJson(text);
@@ -235,7 +251,17 @@ async function main() {
 
   for (const file of files.sort()) {
     const filePath = join(CHUNKS_DIR, file);
-    const raw = await readFile(filePath, "utf-8");
+    let raw: string;
+    try {
+      raw = await readFile(filePath, "utf-8");
+    } catch (err) {
+      logger.error("Could not read chunk file — skipping", {
+        file,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      structuralFailed++;
+      continue;
+    }
     const status = getStatus(raw);
 
     if (status !== "active") {
@@ -286,7 +312,17 @@ async function main() {
 
   for (const file of activeFiles) {
     const filePath = join(CHUNKS_DIR, file);
-    const raw = await readFile(filePath, "utf-8");
+    let raw: string;
+    try {
+      raw = await readFile(filePath, "utf-8");
+    } catch (err) {
+      logger.error("Could not read chunk file during Phase 2 — skipping", {
+        file,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      failed++;
+      continue;
+    }
     const chunkId = file.replace(".md", "");
 
     process.stdout.write(`  Checking ${chunkId}... `);

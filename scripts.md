@@ -1,96 +1,118 @@
-# Core Project Scripts Reference
+# Scripts Quick Reference
 
-This document provides a quick reference for every script available in the `troubleshooting-poc` directory. These commands form the backbone of your data ingestion pipeline and chat system.
-
-All commands should be executed via `bun run <command-name>`.
+All commands run from the project root: `bun run <command>`
 
 ---
 
-## The Primary Workflows
+## Primary Workflows
 
-### 1. `bun run ingest <pdf-file-or-dir>`
+### `bun run ingest <pdf-file-or-dir>`
 
 - **File:** `src/scripts/ingest.ts`
-- **What it does:** The master orchestration script. This handles the end-to-end processing of new PDFs by running the four pipeline steps (`extract` → `validate` → `relate` → `rebuild`) sequentially.
-- **When to use:** Whenever you need to add brand new PDF manuals into the specific AI knowledge base.
+- **What it does:** Full pipeline in one command — runs `extract → validate → relate → rebuild` in sequence. `extract` and `rebuild` are fatal (pipeline aborts on failure). `validate` and `relate` are non-fatal (pipeline continues with degraded output).
+- **Flags:** `--type=qna` switches the extraction prompt for FAQ/Q&A format PDFs
+- **When to use:** Every time you add new PDFs to the knowledge base
 
-### 2. `bun run chat`
+```bash
+bun run ingest ./my-manual.pdf
+bun run ingest --type=qna ./faq.pdf
+bun run ingest ./docs/procedure/
+```
 
-- **File:** `src/main.ts`
-- **What it does:** Launches the interactive Command Line Interface (CLI) where you can chat with the AI assistant. It does not require a server.
-- **Flags:**
-  - `--debug`: The "Developer View". Using `bun run chat --debug` triggers the Evidence Box, printing exactly which files the AI was handed before it answered.
-- **When to use:** When you want to immediately test how the AI will respond to a user query.
+---
 
-### 3. `bun run server`
+### `bun run server`
 
 - **File:** `src/server.ts`
-- **What it does:** Boots up the Hono HTTP API on `localhost:3000`. Exposes `/api/health` and `/api/chat` for the final frontend React applications to interface with.
-- **When to use:** When you need to connect your frontend UI to the backend engine for a fully visual demonstration.
+- **What it does:** Starts the Hono HTTP API on `http://localhost:3000`. Exposes:
+  - `POST /api/chat` — question-answering endpoint
+  - `GET /api/health` — server status and circuit breaker state
+  - `GET /api/chunks` — list all chunks from `guide.yaml`
+- **Production features:** Rate limiting (20 req/60s per session), body size guard (64 KB), request timeout (120s), CORS from `CORS_ORIGIN` env var, graceful SIGTERM/SIGINT shutdown, fire-and-forget NDJSON logging, request correlation ID on every response (`X-Request-Id` header)
 
 ---
 
-## 🏗️ Pipeline: Individual Steps (Ingestion Flow)
+### `bun run chat`
 
-If you don't use `ingest`, you can run these individual steps manually to build your index.
+- **File:** `src/main.ts`
+- **What it does:** Interactive terminal chat — no server required
+- **Flags:** `--debug` prints the exact chunks retrieved before each answer (Evidence Box)
 
-### 4. `bun run extract <pdf-file>`
+---
+
+## Pipeline Steps (individual)
+
+Use `bun run ingest` instead unless you need to re-run a specific step.
+
+### `bun run extract <pdf-file>`
 
 - **File:** `src/extract.ts`
-- **What it does:** (Step 1) Reads a PDF, dynamically chunks the document by headings, passes it to the LLM to extract the data, and outputs `.md` markdown files. It updates `source-manifest.json` with the original PDF mapping.
-- **Flags:**
-  - `--type=qna`: Switches the LLM prompt to heavily prioritize Question/Answer formats instead of generic standard operating procedures.
+- **Step:** 1 of 4
+- **What it does:** Reads the PDF, chooses extraction strategy by size, calls the LLM, writes `.md` chunk files to `data/chunks/`, updates `source-manifest.json`
+- **Strategy:** PDFs < 4 MB → single LLM call. PDFs ≥ 4 MB with text layer → segmented by headings (one LLM call per segment). Image-only PDFs → single-shot fallback.
+- **Flags:** `--type=qna` uses the Q&A extraction prompt
 
-### 5. `bun run validate`
+### `bun run validate`
 
 - **File:** `src/scripts/validate.ts`
-- **What it does:** (Step 2) Quality Control. It first runs a fast Zod structural pass ensuring the chunks haven't broken any JSON limits. Then it queries the LLM to rate the Clarity, Consistency, and Completeness of the newly extracted chunks.
+- **Step:** 2 of 4
+- **What it does:**
+  - Phase 1 (no LLM): Zod schema check on front matter + verifies `## Context`, `## Response`, `## Escalation` sections exist. Failed chunks immediately tagged `status: review`.
+  - Phase 2 (LLM): Rates each structurally valid chunk on **Clarity**, **Consistency**, and **Completeness**. Failed chunks tagged `status: review`.
+- **Reliability:** Each LLM call uses `callLlmWithRetry` (1 automatic retry, 2s delay). Per-file read errors are skipped, not fatal.
 
-### 6. `bun run relate`
+### `bun run relate`
 
 - **File:** `src/scripts/relate.ts`
-- **What it does:** (Step 3) Graph generation. Asks the AI to identify sibling or child relationships between chunks, updating the `related_chunks` lists inside the `.md` front-matter to connect concepts for better Retrieval.
+- **Step:** 3 of 4
+- **What it does:** LLM pass to find related chunks and write `related_chunks` into each `.md` front matter. On LLM error, the chunk keeps its existing `related_chunks` (graceful fallback).
+- **Reliability:** Each LLM call uses `callLlmWithRetry`. Per-file read errors are skipped.
 
-### 7. `bun run rebuild`
+### `bun run rebuild`
 
 - **File:** `src/scripts/rebuild-guide.ts`
-- **What it does:** (Step 4) Compiles all active `.md` chunk files into the unified `guide.yaml` index. It physically removes any chunks marked `status: review` or `status: deprecated`.
+- **Step:** 4 of 4
+- **What it does:** Reads all `.md` files in `data/chunks/`, writes `data/guide.yaml` from chunks where `status: active`. Chunks with `status: review` or `status: deprecated` are excluded from the index — their `.md` files are not deleted.
+- **When to run manually:** After any direct edits to chunk files or after `bun run delete`
 
 ---
 
-## 🧪 Testing & Evaluation Scripts
+## Testing & Evaluation
 
-### 8. `bun run score`
-
-- **File:** `src/scripts/eval-retrieval.ts`
-- **What it does:** Automates accuracy testing for the retrieval architecture. It runs queries from `data/test-queries.json` and measures whether the AI successfully retrieves the exact expected `chunk_id`s, outputting a percentage score.
-
-### 9. `bun run e2e-test` (or `bun run test`)
+### `bun run e2e-test` (also `bun run test`)
 
 - **File:** `src/scripts/e2e-test.ts`
-- **What it does:** Regression structure testing. Rapidly validates that `guide.yaml` and the `/data/chunks` folder align perfectly. Checks all chunks against `Zod` models, validates front matter rules, and ensures `## Context`, `## Response`, and `## Escalation` headers are present. (Runs in milliseconds, no LLM cost).
+- **What it does:** Structural regression tests — verifies `guide.yaml` ↔ `data/chunks/` alignment, Zod schema compliance, required markdown sections, and `related_chunks` format. ~170+ checks. Zero LLM calls, runs in seconds.
 
-### 10. `bun run validate-guide`
+### `bun run score`
 
-- **File:** `src/scripts/validate-guide.ts`
-- **What it does:** Targeted, fast structural check specifically on the `guide.yaml` index alone.
+- **File:** `src/scripts/eval-retrieval.ts`
+- **What it does:** Retrieval accuracy evaluation — runs questions from `data/test-queries.json` against the retrieval system and scores how many expected chunk IDs are returned. Requires a gold-standard query set.
 
 ---
 
-## 🛠️ Utilities & Maintenance
+## Utilities & Maintenance
 
-### 11. `bun run chunk <pdf-file>`
+### `bun run chunk <pdf-file>`
 
 - **File:** `src/scripts/chunk-debug.ts`
-- **What it does:** Debugging tool that bypasses the LLM entirely. It runs a PDF through the deterministic chunker engine and saves each segmented block of text as a `.txt` file into `data/debug-chunks/`.
-- **When to use:** When you want to visualize exactly how the document is being sliced and exactly what text is being sent to the AI during extraction.
+- **What it does:** Segments a PDF using the chunker engine and saves each block as a `.txt` to `data/debug-chunks/` — shows exactly what text the LLM will receive, without making any LLM call. Use this when extraction results look wrong.
 
-### 12. `bun run perf-report`
-
-- **File:** `src/scripts/perf-report.ts`
-- **What it does:** Data analytics tool. Scans the ingestion histories in `data/reports/` and aggregates metrics, providing an average duration summary and failure rate for each step across extraction/validation pipelines.
-
-### 12. `bun run delete <chunk_id>`
+### `bun run delete <chunk_id>`
 
 - **File:** `src/scripts/delete.ts`
-- **What it does:** Safely deletes a specific chunk from the knowledge base by purging its `.md` file from `/data/chunks/` and immediately stripping it out of `guide.yaml`.
+- **What it does:** Deletes `data/chunks/<chunk_id>.md`, then calls `bun run rebuild` to regenerate `guide.yaml`. Never delete chunk files manually — use this command so the index stays in sync.
+
+```bash
+bun run delete update-email-preferences-default
+```
+
+### `bun run validate-guide`
+
+- **File:** `src/scripts/validate-guide.ts`
+- **What it does:** Fast Zod-only structural check on `guide.yaml` entries. No LLM. Runs in under 1 second. Useful as a sanity check after manual edits to `guide.yaml`.
+
+### `bun run perf-report`
+
+- **File:** `src/scripts/perf-report.ts`
+- **What it does:** Reads historical ingestion reports from `data/reports/` and prints average duration per pipeline step across all runs.

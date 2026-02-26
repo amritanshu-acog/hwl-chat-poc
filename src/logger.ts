@@ -19,6 +19,7 @@
 
 import winston from "winston";
 import { join } from "path";
+import { AsyncLocalStorage } from "async_hooks";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -26,6 +27,20 @@ const SERVICE_NAME = "hwl-ingestion-pipeline";
 const LOG_DIR = join(process.cwd(), "logs");
 const LOG_FILE = join(LOG_DIR, "app.log");
 const LOG_LEVEL = process.env.LOG_LEVEL ?? "info";
+
+// ─── Request correlation context ─────────────────────────────────────────────
+// Stores a reqId for the current async context (i.e. one HTTP request).
+// Any logger call made within runWithRequestId() will automatically include it.
+
+const requestContext = new AsyncLocalStorage<{ reqId: string }>();
+
+/** Wrap an async request handler so all logger calls within it carry reqId. */
+export function runWithRequestId<T>(
+  reqId: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  return requestContext.run({ reqId }, fn);
+}
 
 // ─── ELK-compatible JSON format ──────────────────────────────────────────────
 //
@@ -36,13 +51,15 @@ const LOG_LEVEL = process.env.LOG_LEVEL ?? "info";
 
 const elkJsonFormat = winston.format.combine(
   winston.format.timestamp({ format: "YYYY-MM-DDTHH:mm:ss.SSSZ" }),
-  winston.format.errors({ stack: true }), // include stack traces in error logs
+  winston.format.errors({ stack: true }),
   winston.format((info) => {
-    // Promote `service` field to top-level so ELK indexing is consistent
     info.service = SERVICE_NAME;
+    // Attach reqId from the current async context (if inside a request)
+    const ctx = requestContext.getStore();
+    if (ctx?.reqId) info.reqId = ctx.reqId;
     return info;
   })(),
-  winston.format.json(), // ensures a single-line JSON object
+  winston.format.json(),
 );
 
 // ─── Pretty console format (developer experience) ────────────────────────────

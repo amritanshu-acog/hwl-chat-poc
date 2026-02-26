@@ -17,6 +17,89 @@ function model() {
   return _model;
 }
 
+// ─── Circuit Breaker ───────────────────────────────────────────────────────────
+//
+// Three states:
+//   CLOSED    — normal operation, all calls go through
+//   OPEN      — threshold consecutive failures hit; calls fail-fast immediately
+//   HALF_OPEN — one probe allowed after resetMs; success → CLOSED, fail → OPEN
+//
+// Thresholds are read from CONFIG.server so they can be tuned via env vars
+// without code changes. See config.ts for CIRCUIT_BREAKER_THRESHOLD and
+// CIRCUIT_BREAKER_RESET_MS.
+
+type BreakerState = "CLOSED" | "OPEN" | "HALF_OPEN";
+
+const breaker = {
+  state: "CLOSED" as BreakerState,
+  failures: 0,
+  openedAt: 0,
+};
+
+export function getBreakerState(): BreakerState {
+  return breaker.state;
+}
+
+function breakerCall<T>(fn: () => Promise<T>): Promise<T> {
+  const { circuitBreakerThreshold, circuitBreakerResetMs } = CONFIG.server;
+  const now = Date.now();
+
+  // OPEN → check if reset window has elapsed to allow a probe
+  if (breaker.state === "OPEN") {
+    if (now - breaker.openedAt >= circuitBreakerResetMs) {
+      breaker.state = "HALF_OPEN";
+      console.warn("⚡ Circuit breaker: HALF_OPEN — sending probe request");
+    } else {
+      const remainingMs = circuitBreakerResetMs - (now - breaker.openedAt);
+      return Promise.reject(
+        new Error(
+          `Circuit breaker OPEN — LLM provider unavailable. Retrying in ${Math.ceil(remainingMs / 1000)}s.`,
+        ),
+      );
+    }
+  }
+
+  return fn().then(
+    (result) => {
+      // Success — reset failure counter and close the breaker
+      if (breaker.state !== "CLOSED") {
+        console.log("✅ Circuit breaker: probe succeeded — CLOSED");
+      }
+      breaker.failures = 0;
+      breaker.state = "CLOSED";
+      return result;
+    },
+    (err) => {
+      breaker.failures++;
+      if (
+        breaker.state === "HALF_OPEN" ||
+        breaker.failures >= circuitBreakerThreshold
+      ) {
+        breaker.state = "OPEN";
+        breaker.openedAt = Date.now();
+        console.error(
+          `❌ Circuit breaker: OPEN after ${breaker.failures} consecutive failure(s). ` +
+            `Will retry in ${circuitBreakerResetMs / 1000}s.`,
+        );
+      }
+      throw err;
+    },
+  );
+}
+
+/**
+ * Convenience wrapper: runs fn() through the circuit breaker with one retry
+ * on transient errors (2 s delay). Used by validate.ts and relate.ts.
+ */
+export async function callLlmWithRetry<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return await breakerCall(fn);
+  } catch {
+    await new Promise((r) => setTimeout(r, 2_000));
+    return breakerCall(fn); // let the second error propagate
+  }
+}
+
 // ─── Guide loader ──────────────────────────────────────────────────────────────
 
 const GUIDE_PATH = join(process.cwd(), "data", "guide.yaml");
@@ -91,6 +174,75 @@ export function cleanJson(raw: string): string {
   return cleaned;
 }
 
+// ─── LLM Error Classification ─────────────────────────────────────────────────
+
+export type LlmErrorType =
+  | "rate_limit" // 429 — back off and retry
+  | "auth" // 401 / 403 — bad API key, do not retry
+  | "token_limit" // context / token exceeded — truncation needed, do not retry
+  | "transient" // 5xx / network — retry with backoff
+  | "unknown"; // anything else
+
+export function classifyLlmError(err: unknown): LlmErrorType {
+  const msg =
+    err instanceof Error
+      ? err.message.toLowerCase()
+      : String(err).toLowerCase();
+  const status: number | undefined =
+    (err as any)?.status ?? (err as any)?.statusCode;
+
+  if (
+    status === 401 ||
+    status === 403 ||
+    msg.includes("api key") ||
+    msg.includes("unauthorized") ||
+    msg.includes("forbidden")
+  ) {
+    return "auth";
+  }
+  if (
+    status === 429 ||
+    msg.includes("rate limit") ||
+    msg.includes("too many requests") ||
+    msg.includes("quota")
+  ) {
+    return "rate_limit";
+  }
+  if (
+    msg.includes("token") ||
+    msg.includes("context length") ||
+    msg.includes("maximum context") ||
+    msg.includes("content too large") ||
+    status === 413
+  ) {
+    return "token_limit";
+  }
+  if (status !== undefined && status >= 500) {
+    return "transient";
+  }
+  return "unknown";
+}
+
+/** Exponential backoff with optional jitter — parameters come from CONFIG.extraction */
+function sleep(attempt: number): Promise<void> {
+  const base = CONFIG.extraction.retryBaseDelayMs;
+  const cap = CONFIG.extraction.retryMaxDelayMs;
+
+  let ms = Math.min(base * Math.pow(2, attempt), cap);
+
+  if (CONFIG.extraction.retryJitter) {
+    // ±20% jitter — prevents thundering herd when parallel extractions all
+    // hit a rate limit at the same time and would otherwise all retry together
+    const jitterFactor = 1 + (Math.random() * 0.4 - 0.2); // 0.8 – 1.2
+    ms = Math.round(ms * jitterFactor);
+  }
+
+  console.warn(
+    `⏳ Backoff: waiting ${ms}ms before retry (attempt ${attempt + 1})...`,
+  );
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 // ─── Chunk Extraction ──────────────────────────────────────────────────────────
 
 export async function extractChunksFromDocument(
@@ -160,16 +312,38 @@ Return ONLY a raw JSON array. Start with [ and end with ]. No markdown fences. N
       );
     }
     try {
-      const result = await generateText({
-        model: model(),
-        system: systemPrompt,
-        messages,
-        maxOutputTokens: CONFIG.extraction.maxOutputTokens,
-      });
+      const result = await breakerCall(() =>
+        generateText({
+          model: model(),
+          system: systemPrompt,
+          messages,
+          maxOutputTokens: CONFIG.extraction.maxOutputTokens,
+        }),
+      );
       text = result.text;
     } catch (error) {
-      console.error("❌ LLM call failed during extraction:", error);
       lastError = error;
+      const errType = classifyLlmError(error);
+
+      if (errType === "auth") {
+        console.error(
+          "❌ Authentication error — check your API key. Aborting retries.",
+          error,
+        );
+        break; // no point retrying a bad key
+      } else if (errType === "token_limit") {
+        console.error(
+          "❌ Token / context limit exceeded — segment may be too large. Aborting retries.",
+          error,
+        );
+        break; // retrying with the same content won't help
+      } else {
+        console.error(
+          `❌ LLM call failed [${errType}] during extraction (attempt ${attempt + 1}):`,
+          error,
+        );
+        if (attempt < maxRetries) await sleep(attempt);
+      }
       continue; // retry
     }
 
@@ -294,10 +468,24 @@ If no chunks are relevant, return: []`;
 
   // Perf timing: retrieval LLM call (GAP-D1-16)
   console.time("⏱  Step 1 — retrieval");
-  const { text } = await generateText({
-    model: model(),
-    prompt: retrievalPrompt,
-  });
+  let text: string;
+  try {
+    const result = await breakerCall(() =>
+      generateText({
+        model: model(),
+        prompt: retrievalPrompt,
+      }),
+    );
+    text = result.text;
+  } catch (err) {
+    const errType = classifyLlmError(err);
+    console.warn(
+      `⚠️  Step 1 — retrieval LLM call failed [${errType}]. Returning empty chunk list.`,
+      err,
+    );
+    console.timeEnd("⏱  Step 1 — retrieval");
+    return [];
+  }
   console.timeEnd("⏱  Step 1 — retrieval");
 
   try {
@@ -427,16 +615,43 @@ export async function answerTroubleshootingQuestion(
 
   // Perf timing: generation LLM call (GAP-D1-16)
   console.time("⏱  Step 2 — generation");
-  const { text } = await generateText({
-    model: model(),
-    system: systemPrompt + contextBlock + modeBlock,
-    messages: [...conversationHistory, { role: "user", content: question }],
-  });
+  let genText: string;
+  try {
+    const result = await breakerCall(() =>
+      generateText({
+        model: model(),
+        system: systemPrompt + contextBlock + modeBlock,
+        messages: [...conversationHistory, { role: "user", content: question }],
+      }),
+    );
+    genText = result.text;
+  } catch (err) {
+    const errType = classifyLlmError(err);
+    console.error(`❌ Step 2 — generation LLM call failed [${errType}]:`, err);
+    console.timeEnd("⏱  Step 2 — generation");
+    // Return a safe user-facing error response rather than throwing
+    const errorResponse = parseChatResponse(
+      JSON.stringify({
+        type: "alert",
+        data: {
+          severity: "danger",
+          title: "Assistant unavailable",
+          body:
+            errType === "auth"
+              ? "API key error — please check your configuration."
+              : errType === "rate_limit"
+                ? "The AI provider is rate-limiting requests. Please try again in a moment."
+                : "The AI service is temporarily unavailable. Please try again.",
+        },
+      }),
+    );
+    return { raw: "", parsed: errorResponse, contextChunks };
+  }
   console.timeEnd("⏱  Step 2 — generation");
 
-  console.log("🔎 Raw chat LLM output:", text.substring(0, 1000));
+  console.log("🔎 Raw chat LLM output:", genText.substring(0, 1000));
 
-  const parsed = parseChatResponse(text);
+  const parsed = parseChatResponse(genText);
 
-  return { raw: text, parsed, contextChunks };
+  return { raw: genText, parsed, contextChunks };
 }
