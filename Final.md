@@ -55,11 +55,14 @@ At the end, a structured JSON report is written to `data/reports/ingest-<timesta
 | Individual chunk fails Zod | Logged, skipped — remaining chunks are still saved |
 | PDF file unreadable | Logged; that source is counted as failed; pipeline continues to next PDF |
 
-**Circuit breaker (shared across all LLM calls):**
+**Resilience Mechanisms (Active on all LLM calls):**
 
-- Threshold: 5 consecutive failures → breaker **OPEN**.
-- While OPEN: all LLM calls fail immediately with an error (no network call made).
-- After 60 s (configurable): breaker moves to **HALF_OPEN**, one probe request is sent. Success → **CLOSED**. Failure → back to **OPEN**.
+- **Circuit Breaker:** A pattern to prevent flooding the provider with requests when it's already failing.
+  - _Threshold:_ 5 consecutive failures → breaker opens (**OPEN**).
+  - _While OPEN:_ all LLM calls fail immediately with an error locally (no network call made), saving time and preventing rate-limit bans.
+  - _Recovery:_ After 60 seconds, the breaker moves to **HALF_OPEN**. It allows exactly _one_ probe request through. If it succeeds, the breaker resets to **CLOSED**. If it fails, it trips back to **OPEN** for another 60 seconds.
+- **Exponential Backoff:** If a request fails due to rate limits or transient errors, the system doesn't retry immediately. It waits longer between each attempt. (e.g., attempt 1 waits 1s, attempt 2 waits 2s). This gives the overwhelmed server time to recover.
+- **Jitter:** Instead of waiting exactly 1s or exactly 2s, the system adds a random element (±20%). This prevents a "thundering herd" problem where multiple parallel extraction tasks get rate-limited, wait exactly the same amount of time, and all retry at exactly the same millisecond, crashing the provider again.
 
 ---
 
@@ -100,13 +103,14 @@ At the end, a structured JSON report is written to `data/reports/ingest-<timesta
 
 **What it does:**
 
-- Reads `guide.yaml`, filters to `status: active` chunks only.
-- Sends all chunk `chunk_id`, `topic`, and `summary` fields to the LLM in a single prompt.
-- LLM returns clusters: a JSON array of arrays of `chunk_id` strings — groups of 2–4 chunks that a user dealing with one would likely also need.
-- Each chunk's `.md` front matter is updated: `related_chunks` is rewritten with the other members of its cluster.
+- Reads the entire `guide.yaml` knowledge base index.
+- Sends the full `guide.yaml` file as-is to the LLM in a single prompt.
+- The LLM is instructed to only consider chunks with `status: active` and to ignore the existing `related_chunks` field.
+- The LLM returns clusters — groups of 2–4 chunk IDs that are genuinely related, meaning a user dealing with one topic in the cluster would likely need the others too.
+- Each active chunk's `.md` front matter is then updated: the `related_chunks` field is rewritten in-place with the other members of its cluster.
 
 **LLM call:**  
-Inline prompt (no `.md` prompt file). Instructs the LLM to return only a raw JSON array of arrays — no explanation.
+Inline prompt. Instructs the LLM to group the provided YAML into a raw JSON array of arrays — no markdown, no explanation.
 
 **Error handling:**
 | Situation | Behaviour |

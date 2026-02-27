@@ -1,7 +1,7 @@
 /**
  * bun run relate
  *
- * Reads guide.yaml, sends all chunk summaries to the LLM in a single call,
+ * Reads guide.yaml, sends it directly to the LLM in a single call,
  * gets back clusters of related chunk_ids, then updates related_chunks in
  * each chunk's .md front matter and rebuilds guide.yaml.
  */
@@ -26,29 +26,18 @@ function model() {
   return _model;
 }
 
-// ─── Types ─────────────────────────────────────────────────────────────────────
-
-interface GuideChunk {
-  chunk_id: string;
-  topic: string;
-  summary: string;
-  status: string;
-}
-
 // ─── Get clusters from LLM ─────────────────────────────────────────────────────
 
-async function getClusters(chunks: GuideChunk[]): Promise<string[][]> {
-  const chunkList = chunks
-    .map(
-      (c) =>
-        `- chunk_id: ${c.chunk_id}\n  topic: ${c.topic}\n  summary: ${c.summary}`,
-    )
-    .join("\n\n");
+async function getClusters(guideYaml: string): Promise<string[][]> {
+  const prompt = `You are a knowledge base curator. Below is the full guide.yaml knowledge base index.
+Group the chunks into clusters of genuinely related chunks — meaning a customer dealing with one topic in a cluster would likely need the others too.
 
-  const prompt = `You are a knowledge base curator. Given the following list of help content chunks, group them into clusters of genuinely related chunks — meaning a customer dealing with one topic in a cluster would likely need the others too.
+IMPORTANT:
+- Only consider chunks where status is "active"
+- Ignore the existing related_chunks field — it is stale and will be replaced
 
-CHUNKS:
-${chunkList}
+GUIDE INDEX:
+${guideYaml}
 
 Rules:
 - Each cluster should contain 2–4 chunk_ids that are directly complementary
@@ -123,8 +112,8 @@ async function main() {
     process.exit(0);
   }
 
-  // 2. Single LLM call — get clusters
-  const clusters = await getClusters(activeChunks);
+  // 2. Single LLM call — send guide.yaml as-is
+  const clusters = await getClusters(guideRaw);
   logger.info("Clusters received", { clusterCount: clusters.length });
 
   if (clusters.length === 0) {
