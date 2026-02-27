@@ -11,13 +11,12 @@ import { join } from "path";
 import { generateText } from "ai";
 import { getModel } from "../providers.js";
 import { cleanJson, callLlmWithRetry } from "../llm-client.js";
-import { execSync } from "child_process";
 import { CONFIG } from "../config.js";
 import { logger } from "../logger.js";
 import { parseGuideEntries } from "../guide-parser.js";
 
 const CHUNKS_DIR = CONFIG.paths.chunks;
-const GUIDE_PATH = CONFIG.paths.guide; // path to guide.yaml
+const GUIDE_PATH = CONFIG.paths.guide;
 
 // ─── Model ─────────────────────────────────────────────────────────────────────
 
@@ -105,8 +104,6 @@ function updateRelatedChunks(raw: string, related: string[]): string {
 // ─── Main ──────────────────────────────────────────────────────────────────────
 
 async function main() {
-  logger.info("Relate pass started (cluster mode)");
-
   // 1. Read guide.yaml
   let guideRaw: string;
   try {
@@ -119,7 +116,7 @@ async function main() {
   const allChunks = parseGuideEntries(guideRaw);
   const activeChunks = allChunks.filter((c) => c.status === "active");
 
-  logger.info("Active chunks loaded", { count: activeChunks.length });
+  logger.info("Relate pass started", { activeChunks: activeChunks.length });
 
   if (activeChunks.length < 2) {
     logger.warn("Need at least 2 active chunks to find relationships");
@@ -127,9 +124,8 @@ async function main() {
   }
 
   // 2. Single LLM call — get clusters
-  logger.info("Sending all chunks to LLM for clustering...");
   const clusters = await getClusters(activeChunks);
-  logger.info("Clusters received", { clusterCount: clusters.length, clusters });
+  logger.info("Clusters received", { clusterCount: clusters.length });
 
   if (clusters.length === 0) {
     logger.warn("No clusters returned — nothing to update");
@@ -164,25 +160,10 @@ async function main() {
 
     const updatedContent = updateRelatedChunks(raw, related);
     await writeFile(filePath, updatedContent, "utf-8");
-
-    logger.info("Updated related_chunks", {
-      chunkId: chunk.chunk_id,
-      related,
-    });
     updated++;
   }
 
-  logger.info("Relate pass complete", { totalUpdated: updated });
-
-  // 5. Rebuild guide.yaml
-  logger.info("Rebuilding guide.yaml...");
-  try {
-    execSync("bun run rebuild", { stdio: "inherit" });
-  } catch {
-    logger.error("Guide rebuild failed — run bun run rebuild manually");
-  }
-
-  logger.info("Relate pass done");
+  logger.info("Relate pass complete", { chunksUpdated: updated });
 }
 
 main().catch((err) => {

@@ -219,8 +219,6 @@ export async function extractChunksFromDocument(
     return [];
   }
 
-  logger.info(`Sending request to LLM for ${extractionType} extraction`);
-
   const systemPrompt = await loadPrompt(
     extractionType === "qna"
       ? "qna-extraction"
@@ -315,16 +313,6 @@ Return ONLY a raw JSON array. Start with [ and end with ]. No markdown fences. N
     }
 
     const arr: any[] = Array.isArray(parsed) ? parsed : [parsed];
-    logger.debug(`Parsed ${arr.length} chunk(s) from LLM output`, {
-      chunks: arr.map((item, i) => ({
-        index: i,
-        chunk_id: item?.chunk_id ?? "MISSING",
-        topic: item?.topic ?? "MISSING",
-        triggers: item?.triggers?.length ?? 0,
-        hasContext: !!item?.context,
-        hasResponse: !!item?.response,
-      })),
-    });
 
     const validated: LLMChunkOutput[] = [];
     for (const item of arr) {
@@ -372,7 +360,6 @@ async function retrieveRelevantChunks(
   conversationHistory: Array<{ role: "user" | "assistant"; content: string }>,
 ): Promise<string[]> {
   const guide = await loadGuide();
-  logger.info("Step 1 — Retrieval: finding relevant chunks from guide");
 
   const retrievalPrompt = `You are a retrieval assistant. Given the user's question and the guide index below, return the chunk_ids of the 2-3 most relevant chunks.
 
@@ -398,18 +385,18 @@ If no chunks are relevant, return: []`;
     text = result.text;
   } catch (err) {
     logger.warn(
-      `Step 1 — retrieval LLM call failed [${classifyLlmError(err)}] — returning empty chunk list`,
-      {
-        durationMs: Date.now() - t0,
-      },
+      `Retrieval LLM call failed [${classifyLlmError(err)}] — returning empty chunk list`,
+      { durationMs: Date.now() - t0 },
     );
     return [];
   }
-  logger.info("Step 1 — retrieval complete", { durationMs: Date.now() - t0 });
 
   try {
     const ids = JSON.parse(cleanJson(text));
-    logger.info(`Step 1 — retrieved chunk IDs: ${ids.join(", ")}`);
+    logger.info("Retrieval complete", {
+      durationMs: Date.now() - t0,
+      chunkIds: Array.isArray(ids) ? ids : [],
+    });
     return Array.isArray(ids) ? ids : [];
   } catch {
     logger.warn("Could not parse retrieval response", { text });
@@ -473,8 +460,6 @@ export async function answerTroubleshootingQuestion(
   }> = [],
   mode: "clarify" | "answer" = "answer",
 ): Promise<ChatResult> {
-  logger.info("Calling LLM", { question, mode });
-
   const chunkIds = await retrieveRelevantChunks(question, conversationHistory);
 
   const guideRaw = await loadGuide();
@@ -496,7 +481,6 @@ export async function answerTroubleshootingQuestion(
           content,
           file,
         });
-        logger.info(`Loaded chunk: ${entry.chunk_id}`);
       } catch {
         logger.warn(`Could not load chunk file: ${file}`);
       }
@@ -514,10 +498,6 @@ export async function answerTroubleshootingQuestion(
       : "Answer mode. Go directly to steps if documentation supports it."
   }`;
 
-  logger.info(
-    `Step 2 — Generating response with ${chunkContents.length} chunk(s) in ${mode} mode`,
-  );
-
   const t0 = Date.now();
   let genText: string;
   try {
@@ -531,7 +511,7 @@ export async function answerTroubleshootingQuestion(
     genText = result.text;
   } catch (err) {
     const errType = classifyLlmError(err);
-    logger.error(`Step 2 — generation LLM call failed [${errType}]`, {
+    logger.error(`Generation LLM call failed [${errType}]`, {
       durationMs: Date.now() - t0,
     });
     const errorResponse = parseChatResponse(
@@ -551,7 +531,12 @@ export async function answerTroubleshootingQuestion(
     );
     return { raw: "", parsed: errorResponse, contextChunks };
   }
-  logger.info("Step 2 — generation complete", { durationMs: Date.now() - t0 });
+
+  logger.info("Generation complete", {
+    durationMs: Date.now() - t0,
+    chunksUsed: chunkContents.length,
+    mode,
+  });
   logger.debug("Raw chat LLM output", { preview: genText.substring(0, 1000) });
 
   return { raw: genText, parsed: parseChatResponse(genText), contextChunks };

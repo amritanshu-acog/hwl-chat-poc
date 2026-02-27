@@ -123,7 +123,7 @@ Feed it PDF documents. The extraction strategy is chosen automatically based on 
 The pipeline then runs four steps in sequence:
 
 1. **Extract** — PDF → validated `.md` chunk files with deterministic, content-hash IDs
-2. **Validate** — Zod structural check (instant, no LLM cost) followed by LLM quality scoring
+2. **Validate** — Zod structural check (instant, no LLM cost)
 3. **Relate** — LLM identifies related chunks and writes cross-references
 4. **Rebuild** — Regenerates `data/guide.yaml` from all active chunk front matter
 
@@ -225,13 +225,13 @@ All commands run from the project root with `bun run <name>`.
 
 > Use `bun run ingest` instead unless you need to re-run a specific step.
 
-| Command                             | Step | Description                                                                                              |
-| ----------------------------------- | ---- | -------------------------------------------------------------------------------------------------------- |
-| `bun run extract <path>`            | 1/4  | PDF → chunk `.md` files. Small PDFs go directly to LLM; large PDFs are segmented by headings first.      |
-| `bun run extract --type=qna <path>` | 1/4  | Same strategy using the Q&A/FAQ extraction prompt.                                                       |
-| `bun run validate`                  | 2/4  | Phase 1: instant Zod structure check. Phase 2: LLM quality scoring (Clarity, Consistency, Completeness). |
-| `bun run relate`                    | 3/4  | LLM pass to populate `related_chunks` fields across the knowledge base.                                  |
-| `bun run rebuild`                   | 4/4  | Regenerates `guide.yaml` from all active chunk front matter. Run after any manual chunk edits.           |
+| Command                             | Step | Description                                                                                         |
+| ----------------------------------- | ---- | --------------------------------------------------------------------------------------------------- |
+| `bun run extract <path>`            | 1/4  | PDF → chunk `.md` files. Small PDFs go directly to LLM; large PDFs are segmented by headings first. |
+| `bun run extract --type=qna <path>` | 1/4  | Same strategy using the Q&A/FAQ extraction prompt.                                                  |
+| `bun run validate`                  | 2/4  | Instant Zod structure check.                                                                        |
+| `bun run relate`                    | 3/4  | LLM pass to populate `related_chunks` fields across the knowledge base.                             |
+| `bun run rebuild`                   | 4/4  | Regenerates `guide.yaml` from all active chunk front matter. Run after any manual chunk edits.      |
 
 ### Testing & Evaluation
 
@@ -267,7 +267,7 @@ flowchart TD
     E --> G
     F --> G
 
-    G --> H["[2] validate.ts\nPhase 1: Zod structural check (no LLM)\nPhase 2: LLM quality gate\n→ Clarity / Consistency / Completeness\nFailed chunks tagged status: review"]
+    G --> H["[2] validate.ts\nZod structural check (no LLM)\nFailed chunks tagged status: review"]
 
     H --> I["[3] relate.ts\nLLM identifies related chunks\nWrites related_chunks into front matter\n1-retry with circuit breaker"]
 
@@ -459,7 +459,7 @@ troubleshooting-poc/
 │   │
 │   └── scripts/
 │       ├── ingest.ts           ← Full pipeline orchestrator (extract → validate → relate → rebuild)
-│       ├── validate.ts         ← Two-phase chunk quality validation
+│       ├── validate.ts         ← Chunk quality validation (Zod structural check)
 │       ├── relate.ts           ← Related chunk cross-referencing
 │       ├── rebuild-guide.ts    ← guide.yaml regeneration from chunk front matter
 │       ├── source-manifest.ts  ← PDF → chunk provenance tracking helpers

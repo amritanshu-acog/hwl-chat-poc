@@ -45,16 +45,12 @@ extract.ts → readPdf()              ← now protected by try/catch (logs clean
 ```
 validate.ts → reads all active .md files
                └─ try/catch per file — a corrupted file is skipped, not fatal
-            → Phase 1: Zod schema check on front matter (no LLM, instant)
-                        + required sections: ## Context, ## Response, ## Escalation
+            → Zod schema check on front matter (no LLM, instant)
+                        + required sections: ## Context, ## Response
                         → failed chunks → status: review immediately
-            → Phase 2: callLlmWithRetry() per chunk
-                        └─ 1 LLM call — checks Clarity + Consistency + Completeness
-                        └─ 1 automatic retry (2s delay) on transient errors
-                        → failed chunks → status: review
 ```
 
-**LLM calls in this step:** up to 1 per active chunk (0 for Phase 1 failures)
+**LLM calls in this step:** 0
 
 ---
 
@@ -122,13 +118,13 @@ source-manifest.json        ← which PDF produced which chunk_ids (for deduplic
 
 ## Files involved
 
-| File                             | What it does                                                                              |
-| -------------------------------- | ----------------------------------------------------------------------------------------- |
-| `src/scripts/ingest.ts`          | Orchestrator — runs all 4 scripts in sequence via child process                           |
-| `src/extract.ts`                 | Reads PDF, chooses extraction strategy, saves .md files + guide.yaml                      |
-| `src/chunker.ts`                 | pdf-parse text extraction + heading-based segmentation + stable content-hash IDs          |
-| `src/llm-client.ts`              | All LLM calls — circuit breaker, error classification, exponential backoff + jitter       |
-| `src/scripts/validate.ts`        | Zod structural check + LLM quality gates; per-file read guard; retry via callLlmWithRetry |
-| `src/scripts/relate.ts`          | LLM-based related_chunks linking; per-file read guard; retry via callLlmWithRetry         |
-| `src/scripts/rebuild-guide.ts`   | Reads all .md front-matter → writes guide.yaml; per-file read guard                       |
-| `src/scripts/source-manifest.ts` | PDF hash + chunk provenance tracking                                                      |
+| File                             | What it does                                                                        |
+| -------------------------------- | ----------------------------------------------------------------------------------- |
+| `src/scripts/ingest.ts`          | Orchestrator — runs all 4 scripts in sequence via child process                     |
+| `src/extract.ts`                 | Reads PDF, chooses extraction strategy, saves .md files + guide.yaml                |
+| `src/chunker.ts`                 | pdf-parse text extraction + heading-based segmentation + stable content-hash IDs    |
+| `src/llm-client.ts`              | All LLM calls — circuit breaker, error classification, exponential backoff + jitter |
+| `src/scripts/validate.ts`        | Zod structural check; per-file read guard                                           |
+| `src/scripts/relate.ts`          | LLM-based related_chunks linking; per-file read guard; retry via callLlmWithRetry   |
+| `src/scripts/rebuild-guide.ts`   | Reads all .md front-matter → writes guide.yaml; per-file read guard                 |
+| `src/scripts/source-manifest.ts` | PDF hash + chunk provenance tracking                                                |

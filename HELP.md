@@ -56,7 +56,7 @@ troubleshooting-poc/
 │   │
 │   └── scripts/
 │       ├── ingest.ts          ← Full pipeline orchestrator (extract → validate → relate → rebuild)
-│       ├── validate.ts        ← Quality check: Zod structure + LLM Clarity/Consistency/Completeness
+│       ├── validate.ts        ← Quality check: Zod structure
 │       ├── relate.ts          ← Find related chunks and wire them together
 │       ├── rebuild-guide.ts   ← Rebuild guide.yaml from active chunk front matter
 │       ├── validate-guide.ts  ← Fast Zod-only check on guide.yaml structure
@@ -109,7 +109,7 @@ bun run ingest a.pdf b.pdf         # multiple files
   ✓ Created: some-topic.md
   ✓ Created: another-topic.md
 
-[2/4] Validate — Zod structural + LLM quality gates
+[2/4] Validate — Zod structural check
   ✅ some-topic.md — structure OK
   ✅ another-topic.md — structure OK
 
@@ -191,10 +191,9 @@ Next steps:
 
 ### 3. `bun run validate`
 
-**What it does:** Two-phase quality check on all active chunks.
+**What it does:** Quality check on all active chunks.
 
-- **Phase 1 (instant, no LLM):** Checks that each `.md` file has valid YAML front matter, all required fields (`chunk_id`, `topic`, `summary`, `triggers`, etc.), and the required markdown sections (`## Context`, `## Response`, `## Escalation`). Marks bad chunks `status: review` immediately — no LLM call wasted.
-- **Phase 2 (LLM):** Checks **Clarity**, **Consistency**, and **Completeness** of each structurally valid chunk. Uses `callLlmWithRetry` — one automatic retry on transient errors before marking for review.
+- Checks that each `.md` file has valid YAML front matter, all required fields (`chunk_id`, `topic`, `summary`, `triggers`, etc.), and the required markdown sections (`## Context`, `## Response`). Marks bad chunks `status: review` immediately — no LLM call wasted.
 
 ```bash
 bun run validate
@@ -203,31 +202,16 @@ bun run validate
 **Expected output:**
 
 ```
-🔍 Validating chunks (Phase 1: Structural · Phase 2: LLM Quality)...
-
-Phase 1 — Zod structural check: front-matter schema + required sections
-Phase 2 — LLM quality gates:    Clarity · Consistency · Completeness
-
-━━━ Phase 1: Structural Validation ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🔍 Validating chunks (Zod structural check)...
 
   ✅ timecard-invoices-process.md — structure OK
   ✅ email-notification-preferences.md — structure OK
   ...
 
-  Structural: 21 passed, 0 failed
-
-━━━ Phase 2: LLM Quality Gates ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-📂 Sending 21 structurally valid active chunk(s) to LLM...
-
-  ✅ timecard-invoices-process        Clarity ✓  Consistency ✓  Completeness ✓
-  ✅ email-notification-preferences   Clarity ✓  Consistency ✓  Completeness ✓
-  ...
-
 ✅ Validation complete — 21 passed, 0 failed
 ```
 
-**If a chunk fails Phase 1:**
+**If a chunk fails validation:**
 
 ```
   ❌ some-chunk.md — structural FAIL

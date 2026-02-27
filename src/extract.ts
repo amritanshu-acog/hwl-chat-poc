@@ -137,14 +137,13 @@ async function fallbackExtract(
   extractionType: "procedure" | "qna" | "chat" = "procedure",
 ): Promise<LLMChunkOutput[]> {
   const log = childLogger({ source: basename(source), extractionType });
-  log.info("LLM extraction (single-shot) started");
   const t0 = Date.now();
   const chunks = await extractChunksFromDocument(
     base64,
     undefined,
     extractionType,
   );
-  log.info("LLM extraction (single-shot) complete", {
+  log.info("LLM extraction complete", {
     durationMs: Date.now() - t0,
     chunksProduced: chunks.length,
   });
@@ -179,7 +178,7 @@ async function extractFromSegments(
         segmentPrompt,
         extractionType,
       );
-      logger.info("Segment LLM call complete", {
+      logger.debug("Segment LLM call complete", {
         segmentId: seg.stableChunkId,
         durationMs: Date.now() - t0,
         chunksProduced: chunks.length,
@@ -213,7 +212,6 @@ async function extractSingle(
   const log = childLogger({ source: basename(source), extractionType });
   const { base64: content, buf } = await readPdf(source);
   const currentHash = hashBuffer(buf);
-  log.info("PDF loaded", { sizeKB: (buf.length / 1024).toFixed(1) });
 
   // Skip if unchanged and chunks already exist
   const previousChunkIds = getChunkIdsForSource(manifest, source);
@@ -222,7 +220,6 @@ async function extractSingle(
     previousChunkIds.length > 0
   ) {
     log.info("PDF unchanged — skipping extraction", {
-      hash: currentHash.substring(0, 16),
       existingChunks: previousChunkIds.length,
     });
     return {
@@ -256,7 +253,6 @@ async function extractSingle(
   const isSmallPdf = buf.length < 2 * 1024 * 1024;
 
   if (isSmallPdf) {
-    log.info("PDF < 2 MB — sending directly to LLM");
     chunks = await fallbackExtract(content, source, extractionType);
   } else {
     const pdfText = await decodePdfToText(content);
@@ -265,7 +261,6 @@ async function extractSingle(
       const segments = segmentDocument(pdfText, docTitle);
       logSegmentSummary(segments);
 
-      // Save deterministic chunks to temp dir
       const tempPath = CONFIG.paths.temp[extractionType];
       await mkdir(tempPath, { recursive: true });
       for (const seg of segments) {
@@ -275,9 +270,6 @@ async function extractSingle(
           "utf-8",
         );
       }
-      logger.info(
-        `Dumped ${segments.length} deterministic chunks to ${tempPath}`,
-      );
 
       chunks =
         segments.length === 0
@@ -297,7 +289,7 @@ async function extractSingle(
   }
 
   if (chunks.length === 0) {
-    log.warn("No chunks extracted", { source: basename(source) });
+    log.warn("No chunks extracted from source");
     return { saved: 0, newCount: 0, updatedCount: 0, chunkIds: [] };
   }
 
@@ -306,9 +298,6 @@ async function extractSingle(
     ...chunk,
     chunk_id: deriveChunkId(source, chunk.topic, chunk.chunk_id),
   }));
-  log.info("Stable chunk IDs assigned", {
-    chunks: chunks.map((c) => c.chunk_id),
-  });
 
   // Save chunks and update guide
   const guide = await loadGuide();
@@ -341,14 +330,9 @@ async function extractSingle(
       const existingIdx = guide.findIndex((e) => e.chunk_id === chunk.chunk_id);
       if (existingIdx >= 0) {
         guide[existingIdx] = entry;
-        log.info("Chunk updated", { chunkId: chunk.chunk_id });
         updatedCount++;
       } else {
         guide.push(entry);
-        log.info("Chunk created", {
-          chunkId: chunk.chunk_id,
-          topic: chunk.topic,
-        });
         newCount++;
       }
       savedCount++;
@@ -360,6 +344,12 @@ async function extractSingle(
       });
     }
   }
+
+  log.info("Chunks saved", {
+    new: newCount,
+    updated: updatedCount,
+    chunkIds: savedChunkIds,
+  });
 
   await saveGuide(guide);
   await checkContextWindowSize(guide.length);
@@ -382,13 +372,7 @@ async function resolveSources(args: string[]): Promise<string[]> {
         .map((f) => join(resolved, f));
       if (pdfs.length === 0)
         logger.warn("No PDFs found in directory", { directory: resolved });
-      else {
-        logger.info("PDFs resolved", {
-          directory: resolved,
-          count: pdfs.length,
-        });
-        sources.push(...pdfs);
-      }
+      else sources.push(...pdfs);
     } else if (info.isFile()) {
       if (extname(resolved).toLowerCase() !== ".pdf")
         logger.warn("Skipping non-PDF", { path: arg });
@@ -480,7 +464,6 @@ Tip: For a full ingestion pipeline use: bun run ingest <sources>
       chunksUpdated: totalUpdated,
       sourcesFailed: totalFailed,
       elapsedSeconds: ((Date.now() - extractStart) / 1000).toFixed(1),
-      outputDir,
     });
   } catch (error) {
     logger.error("Extraction pipeline failed", {

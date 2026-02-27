@@ -1,26 +1,20 @@
 /**
  * bun run validate
  *
- * TWO-PHASE VALIDATION (GAP-D1-04):
+ * VALIDATION:
  *
  * Phase 1 — Zod Structural Check (fast, no LLM):
  *   Parses YAML front matter from each .md file and validates it against
  *   ChunkFrontMatterSchema. Also checks that required markdown sections
- *   (Context, Response, Escalation) are present.
+ *   (Context, Response) are present.
  *   Structurally invalid chunks are marked status:review immediately.
  *   No LLM call is wasted on broken chunks.
- *
- * Phase 2 — LLM Quality Gates (Clarity, Consistency, Completeness):
- *   Only structurally valid, active chunks proceed to the LLM quality check.
  *
  * Run after extraction before going live.
  */
 
 import { readFile, writeFile, readdir } from "fs/promises";
 import { join } from "path";
-import { generateText } from "ai";
-import { getModel } from "../providers.js";
-import { cleanJson, callLlmWithRetry } from "../llm-client.js";
 import { execSync } from "child_process";
 import { ChunkFrontMatterSchema } from "../schemas.js";
 import { ZodError } from "zod";
@@ -28,86 +22,6 @@ import { CONFIG } from "../config.js";
 import { logger } from "../logger.js";
 
 const CHUNKS_DIR = CONFIG.paths.chunks;
-
-// ─── Model ─────────────────────────────────────────────────────────────────────
-
-let _model: ReturnType<typeof getModel> | null = null;
-function model() {
-  if (!_model) _model = getModel();
-  return _model;
-}
-
-// ─── Validator ─────────────────────────────────────────────────────────────────
-
-interface ValidationResult {
-  passed: boolean;
-  clarity: { pass: boolean; reason: string };
-  consistency: { pass: boolean; reason: string };
-  completeness: { pass: boolean; reason: string };
-}
-
-async function validateChunk(
-  chunkId: string,
-  content: string,
-): Promise<ValidationResult> {
-  const prompt = `You are a knowledge base quality reviewer. Evaluate this helpdesk chunk.
-
-CHUNK:
-${content}
-
-Only FAIL a criterion if there is a genuine blocker — meaning a customer cannot complete the process:
-- CLARITY: Fail only if the topic is fundamentally ambiguous or steps directly contradict each other in a way that causes confusion.
-- CONSISTENCY: Fail only if there are factual contradictions between sections (e.g. a step says do X, another says do not do X, or a referenced step number does not exist).
-- COMPLETENESS: Fail only if a required step is entirely missing — not if it could be more detailed.
-
-Do NOT fail for: wordiness, style preferences, could-be-clearer phrasing, or steps that are brief but accurate.
-
-Return ONLY this JSON:
-{
-  "passed": true | false,
-  "clarity": { "pass": true | false, "reason": "one sentence" },
-  "consistency": { "pass": true | false, "reason": "one sentence" },
-  "completeness": { "pass": true | false, "reason": "one sentence" }
-}`;
-
-  let text: string;
-  try {
-    text = (
-      await callLlmWithRetry(() => generateText({ model: model(), prompt }))
-    ).text;
-  } catch (err) {
-    logger.warn(
-      "LLM call failed during validation (after retry) — marking for review",
-      {
-        chunkId,
-        error: err instanceof Error ? err.message : String(err),
-      },
-    );
-    return {
-      passed: false,
-      clarity: { pass: false, reason: "LLM call failed — could not evaluate" },
-      consistency: { pass: true, reason: "" },
-      completeness: { pass: true, reason: "" },
-    };
-  }
-
-  try {
-    const cleaned = cleanJson(text);
-    return JSON.parse(cleaned) as ValidationResult;
-  } catch {
-    logger.warn("Could not parse LLM validation response", { chunkId });
-    // Fail safe — mark for review if we can't parse
-    return {
-      passed: false,
-      clarity: {
-        pass: false,
-        reason: "Could not parse LLM validation response",
-      },
-      consistency: { pass: true, reason: "" },
-      completeness: { pass: true, reason: "" },
-    };
-  }
-}
 
 // ─── Front matter status updater ───────────────────────────────────────────────
 
@@ -219,7 +133,6 @@ function validateStructure(raw: string, fileName: string): StructuralResult {
 async function main() {
   logger.info("Validation started", {
     phase1: "Zod structural",
-    phase2: "LLM quality gates",
   });
 
   let files: string[];
@@ -297,65 +210,10 @@ async function main() {
     }
   }
 
-  // ── Phase 2: LLM quality check (only structurally valid, active chunks) ───
-  logger.info("Phase 2: LLM quality gates starting", {
-    activeChunks: activeFiles.length,
-  });
-
-  let passed = 0;
-  let failed = 0;
-
-  for (const file of activeFiles) {
-    const filePath = join(CHUNKS_DIR, file);
-    let raw: string;
-    try {
-      raw = await readFile(filePath, "utf-8");
-    } catch (err) {
-      logger.error("Could not read chunk file during Phase 2 — skipping", {
-        file,
-        error: err instanceof Error ? err.message : String(err),
-      });
-      failed++;
-      continue;
-    }
-    const chunkId = file.replace(".md", "");
-
-    process.stdout.write(`  Checking ${chunkId}... `);
-
-    const result = await validateChunk(chunkId, raw);
-
-    if (result.passed) {
-      logger.info("Phase 2 PASS", { chunkId });
-      passed++;
-    } else {
-      logger.warn("Phase 2 FAIL", {
-        chunkId,
-        clarity: result.clarity,
-        consistency: result.consistency,
-        completeness: result.completeness,
-      });
-      failed++;
-
-      // Mark chunk as review
-      const updated = updateStatus(raw, "review");
-      await writeFile(filePath, updated, "utf-8");
-      logger.info("Chunk marked as review (LLM quality failure)", { chunkId });
-    }
-  }
-
-  logger.info("Validation complete", { passed, failed });
-
-  if (failed > 0) {
+  if (structuralFailed > 0) {
     logger.warn(
-      `${failed} chunk(s) marked as review — excluded from retrieval until fixed`,
+      `${structuralFailed} chunk(s) marked as review — excluded from retrieval until fixed`,
     );
-    // Rebuild guide to reflect status changes
-    logger.info("Rebuilding guide.yaml to reflect status changes");
-    try {
-      execSync("bun run rebuild", { stdio: "inherit" });
-    } catch {
-      logger.error("Guide rebuild failed — run bun run rebuild manually");
-    }
   } else {
     logger.info("All chunks passed validation — knowledge base is clean");
   }

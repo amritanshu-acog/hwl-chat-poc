@@ -38,16 +38,6 @@ interface IngestReport {
   success: boolean;
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function banner(text: string): void {
-  logger.info(text);
-}
-
-function stepHeader(step: string, index: number, total: number): void {
-  logger.info(`Step [${index}/${total}]: ${step}`);
-}
-
 /**
  * Run a bun script synchronously.
  * Uses execFileSync (NOT execSync) so args are passed as an array —
@@ -62,12 +52,10 @@ function runStep(label: string, command: string, args: string[]): StepResult {
     execFileSync(command, args, {
       cwd: process.cwd(),
       encoding: "utf-8",
-      // inherit: output streams directly to terminal so user sees progress live
       stdio: "inherit",
     });
     success = true;
   } catch (err: any) {
-    // execFileSync throws on non-zero exit — extract the error message
     error = err?.message ?? String(err);
     success = false;
   }
@@ -76,7 +64,7 @@ function runStep(label: string, command: string, args: string[]): StepResult {
     step: label,
     success,
     durationMs: Date.now() - start,
-    output: "", // stdio:inherit means output went directly to terminal
+    output: "",
     error,
   };
 }
@@ -154,7 +142,7 @@ Sources:
 
 What this does (in order):
   1. extract  — PDF → chunk .md files + guide.yaml
-  2. validate — LLM quality gates (Clarity, Consistency, Completeness)
+  2. validate — Zod structural check
   3. relate   — Populate related_chunks across all active chunks
   4. rebuild  — Regenerate guide.yaml from chunk front matter (source of truth)
 `);
@@ -178,8 +166,7 @@ What this does (in order):
     process.exit(1);
   }
 
-  logger.info("Ingestion orchestrator started");
-  logger.info("Sources queued for ingestion", {
+  logger.info("Ingestion started", {
     sources: sources.map((s) => basename(s)),
     total: sources.length,
   });
@@ -189,7 +176,6 @@ What this does (in order):
   const steps: StepResult[] = [];
 
   // ── Step 1: Extract ─────────────────────────────────────────────────────────
-  stepHeader("Extract — PDF → chunks + guide.yaml", 1, 4);
   const extractResult = runStep("extract", "bun", [
     "run",
     "extract",
@@ -199,10 +185,9 @@ What this does (in order):
   steps.push(extractResult);
 
   if (!extractResult.success) {
-    logger.error("❌ Extraction failed:\n", extractResult.error);
-    logger.error(
-      "\n⛔ Aborting pipeline — no point validating failed extraction.",
-    );
+    logger.error("Extraction failed — aborting pipeline", {
+      error: extractResult.error,
+    });
     printReport({
       startedAt,
       sources,
@@ -213,45 +198,35 @@ What this does (in order):
     });
     process.exit(1);
   }
-  logger.info(`✅ Extract complete (${extractResult.durationMs}ms)`);
 
   // ── Step 2: Validate ────────────────────────────────────────────────────────
-  stepHeader("Validate — Zod structural + LLM quality gates", 2, 4);
   const validateResult = runStep("validate", "bun", ["run", "validate"]);
   steps.push(validateResult);
 
   if (!validateResult.success) {
-    logger.warn(
-      "⚠️  Validation step encountered errors:\n",
-      validateResult.error,
-    );
-    logger.warn(
-      "   Continuing pipeline — failed chunks are marked 'review' and excluded from retrieval.",
-    );
-  } else {
-    logger.info(`✅ Validate complete (${validateResult.durationMs}ms)`);
+    logger.warn("Validation encountered errors — continuing", {
+      error: validateResult.error,
+    });
   }
 
   // ── Step 3: Relate ──────────────────────────────────────────────────────────
-  stepHeader("Relate — populate related_chunks across KB", 3, 4);
   const relateResult = runStep("relate", "bun", ["run", "relate"]);
   steps.push(relateResult);
 
   if (!relateResult.success) {
-    logger.warn("⚠️  Relate step failed:\n", relateResult.error);
-    logger.warn("   Continuing — related_chunks may be empty for new chunks.");
-  } else {
-    logger.info(`✅ Relate complete (${relateResult.durationMs}ms)`);
+    logger.warn("Relate step failed — continuing", {
+      error: relateResult.error,
+    });
   }
 
   // ── Step 4: Rebuild ─────────────────────────────────────────────────────────
-  stepHeader("Rebuild — regenerate guide.yaml from chunk front matter", 4, 4);
   const rebuildResult = runStep("rebuild", "bun", ["run", "rebuild"]);
   steps.push(rebuildResult);
 
   if (!rebuildResult.success) {
-    logger.error("❌ Rebuild failed:\n", rebuildResult.error);
-    // Rebuild failure is critical — guide.yaml may be stale
+    logger.error("Rebuild failed — guide.yaml may be stale", {
+      error: rebuildResult.error,
+    });
     printReport({
       startedAt,
       sources,
@@ -262,7 +237,6 @@ What this does (in order):
     });
     process.exit(1);
   }
-  logger.info(`✅ Rebuild complete (${rebuildResult.durationMs}ms)`);
 
   // ── Final report ────────────────────────────────────────────────────────────
   const chunksInKB = await countActiveChunks();
@@ -277,7 +251,6 @@ What this does (in order):
 
   printReport(report);
 
-  // ── Save structured report (Task 15: Error reporting hook) ──────────────────
   try {
     const reportsDir = CONFIG.paths.reports;
     await mkdir(reportsDir, { recursive: true });
@@ -286,7 +259,7 @@ What this does (in order):
     await writeFile(reportPath, JSON.stringify(report, null, 2), "utf-8");
     logger.info(`📝 Structured report saved: ${reportPath}`);
   } catch (err) {
-    logger.error("⚠️  Failed to save structured report:", err);
+    logger.error("Failed to save structured report", { err });
   }
 
   process.exit(report.success ? 0 : 1);
@@ -295,7 +268,7 @@ What this does (in order):
 // ─── Report printer ───────────────────────────────────────────────────────────
 
 function printReport(report: IngestReport): void {
-  banner(
+  logger.info(
     report.success
       ? "✅ Ingestion Complete"
       : "⚠️  Ingestion Completed with Errors",
@@ -310,16 +283,14 @@ function printReport(report: IngestReport): void {
   logger.info("");
 
   logger.info("  Step Results:");
-  const maxLabel = Math.max(...report.steps.map((s) => s.step.length));
   for (const step of report.steps) {
     const icon = step.success ? "✅" : "❌";
-    const pad = " ".repeat(maxLabel - step.step.length);
     logger.info(
-      `    ${icon} ${step.step}${pad}  ${(step.durationMs / 1000).toFixed(1)}s`,
+      `    ${icon} ${step.step}   ${(step.durationMs / 1000).toFixed(1)}s`,
     );
     if (!step.success && step.error) {
       const preview = step.error.trim().split("\n")[0];
-      logger.warn(`Step error preview: ${preview}`, { step: step.step });
+      logger.warn(`Step error: ${preview}`, { step: step.step });
     }
   }
 

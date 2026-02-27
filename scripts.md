@@ -56,10 +56,8 @@ Use `bun run ingest` instead unless you need to re-run a specific step.
 
 - **File:** `src/scripts/validate.ts`
 - **Step:** 2 of 4
-- **What it does:**
-  - Phase 1 (no LLM): Zod schema check on front matter + verifies `## Context`, `## Response`, `## Escalation` sections exist. Failed chunks immediately tagged `status: review`.
-  - Phase 2 (LLM): Rates each structurally valid chunk on **Clarity**, **Consistency**, and **Completeness**. Failed chunks tagged `status: review`.
-- **Reliability:** Each LLM call uses `callLlmWithRetry` (1 automatic retry, 2s delay). Per-file read errors are skipped, not fatal.
+- **What it does:** Zod schema check on front matter + verifies `## Context`, `## Response` sections exist. Failed chunks immediately tagged `status: review`. No LLM is used.
+- **Reliability:** Per-file read errors are skipped, not fatal.
 
 ### `bun run relate`
 
