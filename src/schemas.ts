@@ -14,7 +14,6 @@ export const ChunkFrontMatterSchema = z.object({
   summary: z.string().min(1),
   triggers: z.array(z.string()).default([]),
   has_conditions: z.boolean().default(false),
-  escalation: z.string().nullable().default(null),
   related_chunks: z.array(z.string()).default([]),
   status: z.enum(["active", "review", "deprecated"]).default("active"),
 });
@@ -33,9 +32,6 @@ export const ChunkSectionSchema = z.object({
 
   // Always present for active customer-facing chunks
   response: z.string().min(1),
-
-  // Always present — either a description or "None required."
-  escalation_detail: z.string().min(1),
 });
 
 export const ChunkSchema = z.object({
@@ -56,7 +52,6 @@ export const LLMChunkOutputSchema = z.object({
   summary: z.string().min(1),
   triggers: z.array(z.string()).min(1),
   has_conditions: z.boolean(),
-  escalation: z.string().nullable(),
   related_chunks: z.array(z.string()).default([]),
   status: z.enum(["active", "review", "deprecated"]).default("active"),
 
@@ -65,7 +60,6 @@ export const LLMChunkOutputSchema = z.object({
   conditions: z.string().optional(), // required when has_conditions: true
   constraints: z.string().optional(),
   response: z.string().min(1),
-  escalation_detail: z.string().min(1),
 });
 
 export type LLMChunkOutput = z.infer<typeof LLMChunkOutputSchema>;

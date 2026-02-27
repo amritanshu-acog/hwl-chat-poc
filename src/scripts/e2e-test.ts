@@ -72,10 +72,6 @@ function parseChunkFrontMatter(raw: string): Record<string, unknown> | null {
   const summary = fm.match(/^summary:\s*>\s*\n\s+(.+)$/m)?.[1]?.trim() ?? "";
   const has_conditions =
     fm.match(/^has_conditions:\s*(true|false)$/m)?.[1] === "true";
-  const escalationRaw =
-    fm.match(/^escalation:\s*(.+)$/m)?.[1]?.trim() ?? "null";
-  const escalation =
-    escalationRaw === "null" ? null : escalationRaw.replace(/^"|"$/g, "");
   const rawStatus = fm.match(/^status:\s*(\w+)$/m)?.[1]?.trim() ?? "active";
 
   const triggersSection = fm.match(/^triggers:\s*\n((?:\s+- .+\n?)*)/m);
@@ -98,7 +94,6 @@ function parseChunkFrontMatter(raw: string): Record<string, unknown> | null {
     summary,
     triggers,
     has_conditions,
-    escalation,
     related_chunks,
     status: rawStatus,
   };
@@ -247,10 +242,6 @@ async function testGuideEntrySchemas(
     const file = block.match(/\n\s+file:\s*(.+)/)?.[1]?.trim() ?? "";
     const has_conditions =
       block.match(/\n\s+has_conditions:\s*(true|false)/)?.[1] === "true";
-    const escalationRaw =
-      block.match(/\n\s+escalation:\s*(.+)/)?.[1]?.trim() ?? "null";
-    const escalation =
-      escalationRaw === "null" ? null : escalationRaw.replace(/^"|"$/g, "");
     const rawStatus =
       block.match(/\n\s+status:\s*(\w+)/)?.[1]?.trim() ?? "active";
 
@@ -277,7 +268,6 @@ async function testGuideEntrySchemas(
         summary,
         triggers,
         has_conditions,
-        escalation,
         related_chunks,
         status: rawStatus,
         file,

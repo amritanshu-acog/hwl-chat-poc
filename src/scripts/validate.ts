@@ -156,10 +156,6 @@ function validateStructure(raw: string, fileName: string): StructuralResult {
   const summary = fm.match(/^summary:\s*>\s*\n\s+(.+)$/m)?.[1]?.trim() ?? "";
   const has_conditions =
     fm.match(/^has_conditions:\s*(true|false)$/m)?.[1] === "true";
-  const escalationRaw =
-    fm.match(/^escalation:\s*(.+)$/m)?.[1]?.trim() ?? "null";
-  const escalation =
-    escalationRaw === "null" ? null : escalationRaw.replace(/^"|"$/g, "");
   const rawStatus = fm.match(/^status:\s*(\w+)$/m)?.[1]?.trim() ?? "active";
 
   const triggersSection = fm.match(/^triggers:\s*\n((?:\s+- .+\n?)*)/m);
@@ -186,7 +182,6 @@ function validateStructure(raw: string, fileName: string): StructuralResult {
       summary,
       triggers,
       has_conditions,
-      escalation,
       related_chunks,
       status: rawStatus,
     });

@@ -32,7 +32,7 @@ interface RawEntry {
   summary: string;
   triggers: string[];
   has_conditions: boolean;
-  escalation: string | null;
+
   related_chunks: string[];
   status: string;
   file: string;
@@ -45,10 +45,6 @@ function parseGuideBlock(block: string): RawEntry | null {
   const file = block.match(/\n\s+file:\s*(.+)/)?.[1]?.trim() ?? "";
   const has_conditions =
     block.match(/\n\s+has_conditions:\s*(true|false)/)?.[1] === "true";
-  const escalationRaw =
-    block.match(/\n\s+escalation:\s*(.+)/)?.[1]?.trim() ?? "null";
-  const escalation =
-    escalationRaw === "null" ? null : escalationRaw.replace(/^"|"$/g, "");
   const rawStatus =
     block.match(/\n\s+status:\s*(\w+)/)?.[1]?.trim() ?? "active";
 
@@ -77,7 +73,6 @@ function parseGuideBlock(block: string): RawEntry | null {
     summary,
     triggers,
     has_conditions,
-    escalation,
     related_chunks,
     status: rawStatus,
     file,

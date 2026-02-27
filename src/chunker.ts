@@ -1,4 +1,5 @@
 import { createHash } from "crypto";
+import { basename } from "path";
 import { CONFIG } from "./config.js";
 import { logger } from "./logger.js";
 
@@ -10,21 +11,47 @@ export interface DocumentSegment {
   stableChunkId: string;
 }
 
-export function deriveChunkId(headingPath: string[], content: string): string {
+/** Slugify text into lowercase-hyphen form. */
+function slugify(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, "")
+    .trim()
+    .replace(/[\s]+/g, "-")
+    .replace(/-+/g, "-")
+    .slice(0, 50)
+    .replace(/^-|-$/g, "");
+}
+
+/**
+ * Derive a stable chunk ID: `{slug}-{8-char hash}`.
+ * Hash input is `basename(source) + topic` — deterministic per document+topic.
+ */
+export function deriveChunkId(
+  source: string,
+  topic: string,
+  llmSlug?: string,
+): string {
+  const shortHash = createHash("sha256")
+    .update(basename(source) + topic)
+    .digest("hex")
+    .slice(0, 8);
+  return `${slugify(llmSlug ?? topic)}-${shortHash}`;
+}
+
+/** Derive a stable ID for a DocumentSegment (used for temp file naming only). */
+function deriveSegmentId(headingPath: string[], content: string): string {
   const base = headingPath
     .join("-")
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .substring(0, 60);
-
   const hash = createHash("sha256")
     .update(content.trim())
     .digest("hex")
     .substring(0, 8);
-
-  const raw = base ? `${base}-${hash}` : hash;
-  return raw.replace(/-{2,}/g, "-");
+  return (base ? `${base}-${hash}` : hash).replace(/-{2,}/g, "-");
 }
 
 // ─── Table of Contents extraction ────────────────────────────────────────────
@@ -334,7 +361,7 @@ export function segmentDocument(
       headingPath: seg.headingPath,
       content,
       pageRange: { start: seg.pageStart, end: seg.pageEnd },
-      stableChunkId: deriveChunkId(seg.headingPath, content),
+      stableChunkId: deriveSegmentId(seg.headingPath, content),
     };
   });
 }
