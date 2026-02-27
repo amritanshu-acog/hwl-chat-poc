@@ -116,9 +116,9 @@ Feed it PDF documents. The extraction strategy is chosen automatically based on 
 
 | Condition                                  | Strategy                                                             |
 | ------------------------------------------ | -------------------------------------------------------------------- |
-| PDF **< 4 MB**                             | Full PDF sent to the LLM in a **single call**                        |
-| PDF **≥ 4 MB** with a text layer           | Segmented by headings via the chunker — **one LLM call per segment** |
-| PDF **≥ 4 MB**, image-only (no text layer) | Single-shot fallback — full PDF sent to LLM                          |
+| PDF **< 2 MB**                             | Full PDF sent to the LLM in a **single call**                        |
+| PDF **≥ 2 MB** with a text layer           | Segmented by headings via the chunker — **one LLM call per segment** |
+| PDF **≥ 2 MB**, image-only (no text layer) | Single-shot fallback — full PDF sent to LLM                          |
 
 The pipeline then runs four steps in sequence:
 

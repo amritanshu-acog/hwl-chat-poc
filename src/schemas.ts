@@ -124,15 +124,6 @@ export const AlertResponseSchema = z.object({
   }),
 });
 
-export const ImageBlockResponseSchema = z.object({
-  type: z.literal("image"),
-  data: z.object({
-    caption: z.string(),
-    description: z.string(),
-    altText: z.string(),
-  }),
-});
-
 export const ChecklistResponseSchema = z.object({
   type: z.literal("checklist"),
   data: z.object({
@@ -169,7 +160,6 @@ export const ChatResponseSchema = z.discriminatedUnion("type", [
   StepsResponseSchema,
   ChoicesResponseSchema,
   AlertResponseSchema,
-  ImageBlockResponseSchema,
   ChecklistResponseSchema,
   EscalationResponseSchema,
   SummaryResponseSchema,
@@ -180,7 +170,6 @@ export type ChatResponse = z.infer<typeof ChatResponseSchema>;
 export type StepsResponse = z.infer<typeof StepsResponseSchema>;
 export type ChoicesResponse = z.infer<typeof ChoicesResponseSchema>;
 export type AlertResponse = z.infer<typeof AlertResponseSchema>;
-export type ImageBlockResponse = z.infer<typeof ImageBlockResponseSchema>;
 export type ChecklistResponse = z.infer<typeof ChecklistResponseSchema>;
 export type EscalationResponse = z.infer<typeof EscalationResponseSchema>;
 export type SummaryResponse = z.infer<typeof SummaryResponseSchema>;
