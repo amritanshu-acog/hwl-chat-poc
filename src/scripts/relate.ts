@@ -13,7 +13,7 @@ import { getModel } from "../providers.js";
 import { cleanJson, callLlmWithRetry } from "../llm-client.js";
 import { CONFIG } from "../config.js";
 import { logger } from "../logger.js";
-import { parseGuideEntries } from "../guide-parser.js";
+import { parseGuideEntries } from "../utils/guide-parser.js";
 
 const CHUNKS_DIR = CONFIG.paths.chunks;
 const GUIDE_PATH = CONFIG.paths.guide;

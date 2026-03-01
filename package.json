@@ -11,12 +11,9 @@
     "validate-guide": "bun src/scripts/validate-guide.ts",
     "relate": "bun src/scripts/relate.ts",
     "rebuild": "bun src/scripts/rebuild-guide.ts",
-    "chunk": "bun src/scripts/chunk-debug.ts",
-    "perf-report": "bun src/scripts/perf-report.ts",
     "score": "bun src/scripts/eval-retrieval.ts",
     "delete": "bun src/scripts/delete.ts",
-    "e2e-test": "bun src/scripts/e2e-test.ts",
-    "test": "bun src/scripts/e2e-test.ts",
+    "test": "bun src/scripts/test.ts",
     "server": "bun run src/server.ts",
     "dev": "bun --watch src/main.ts",
     "build": "tsc"
@@ -25,7 +22,6 @@
     "@types/bun": "latest",
     "@types/node": "^25.2.3",
     "@types/node-fetch": "^2.6.13",
-    "@types/pdf-parse": "^1.1.5",
     "tsx": "^4.21.0"
   },
   "peerDependencies": {
@@ -39,7 +35,6 @@
     "dotenv": "^17.3.1",
     "hono": "^4.11.9",
     "node-fetch": "^3.3.2",
-    "pdf-parse": "^2.4.5",
     "winston": "^3.19.0",
     "zod": "^4.3.6"
   }

@@ -48,8 +48,8 @@ Use `bun run ingest` instead unless you need to re-run a specific step.
 
 - **File:** `src/extract.ts`
 - **Step:** 1 of 4
-- **What it does:** Reads the PDF, chooses extraction strategy by size, calls the LLM, writes `.md` chunk files to `data/chunks/`, updates `source-manifest.json`
-- **Strategy:** PDFs < 4 MB → single LLM call. PDFs ≥ 4 MB with text layer → segmented by headings (one LLM call per segment). Image-only PDFs → single-shot fallback.
+- **What it does:** Reads the PDF, calls the LLM, writes `.md` chunk files to `data/chunks/`, updates `source-manifest.json`
+- **Strategy:** PDFs < 2 MB → single LLM call. PDFs ≥ 2MB are rejected.
 - **Flags:** `--type=qna` uses the Q&A extraction prompt
 
 ### `bun run validate`
@@ -77,9 +77,9 @@ Use `bun run ingest` instead unless you need to re-run a specific step.
 
 ## Testing & Evaluation
 
-### `bun run e2e-test` (also `bun run test`)
+### `bun run test`
 
-- **File:** `src/scripts/e2e-test.ts`
+- **File:** `src/scripts/test.ts`
 - **What it does:** Structural regression tests — verifies `guide.yaml` ↔ `data/chunks/` alignment, Zod schema compliance, required markdown sections, and `related_chunks` format. ~170+ checks. Zero LLM calls, runs in seconds.
 
 ### `bun run score`
@@ -90,11 +90,6 @@ Use `bun run ingest` instead unless you need to re-run a specific step.
 ---
 
 ## Utilities & Maintenance
-
-### `bun run chunk <pdf-file>`
-
-- **File:** `src/scripts/chunk-debug.ts`
-- **What it does:** Segments a PDF using the chunker engine and saves each block as a `.txt` to `data/debug-chunks/` — shows exactly what text the LLM will receive, without making any LLM call. Use this when extraction results look wrong.
 
 ### `bun run delete <chunk_id>`
 
@@ -109,8 +104,3 @@ bun run delete update-email-preferences-default
 
 - **File:** `src/scripts/validate-guide.ts`
 - **What it does:** Fast Zod-only structural check on `guide.yaml` entries. No LLM. Runs in under 1 second. Useful as a sanity check after manual edits to `guide.yaml`.
-
-### `bun run perf-report`
-
-- **File:** `src/scripts/perf-report.ts`
-- **What it does:** Reads historical ingestion reports from `data/reports/` and prints average duration per pipeline step across all runs.

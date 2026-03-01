@@ -104,11 +104,8 @@ export function getModel() {
   const providerName = resolveProviderName();
   const config = PROVIDERS[providerName];
   const modelId = process.env.AI_MODEL || config.defaultModel;
-  const apiKeyPreview = process.env[config.envKey]!.substring(0, 10);
 
-  console.log(
-    `✅ Provider: ${providerName} | Model: ${modelId} | Key: ${apiKeyPreview}...`,
-  );
+  console.log(`✅ Provider: ${providerName} | Model: ${modelId}`);
 
   return config.createModel(modelId);
 }

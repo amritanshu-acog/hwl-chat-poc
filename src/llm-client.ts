@@ -1,6 +1,6 @@
 import { generateText } from "ai";
 import { getModel } from "./providers.js";
-import { loadPrompt } from "./prompt-loader.js";
+import { loadPrompt } from "./utils/prompt-loader.js";
 import { LLMChunkOutputSchema, ChatResponseSchema } from "./schemas.js";
 import { ZodError } from "zod";
 import type { ChatResponse, LLMChunkOutput } from "./schemas.js";
@@ -8,7 +8,7 @@ import { readFile, writeFile, mkdir } from "fs/promises";
 import { join } from "path";
 import { CONFIG } from "./config.js";
 import { logger } from "./logger.js";
-import { parseGuideEntries } from "./guide-parser.js";
+import { parseGuideEntries } from "./utils/guide-parser.js";
 
 // ─── Lazy-initialised model ────────────────────────────────────────────────────
 
@@ -224,7 +224,7 @@ export async function extractChunksFromDocument(
       ? "qna-extraction"
       : extractionType === "chat"
         ? "chat-extraction"
-        : "extraction",
+        : "procedure-extraction",
   );
 
   const userMessage =

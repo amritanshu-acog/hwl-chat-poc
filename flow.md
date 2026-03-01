@@ -14,29 +14,25 @@ Resolves your PDF path to an absolute path. Then runs 4 steps in order by callin
 
 The extraction strategy is chosen automatically based on PDF size and whether a text layer exists:
 
-| Condition                                  | Strategy                                                                              |
-| ------------------------------------------ | ------------------------------------------------------------------------------------- |
-| PDF **< 4 MB**                             | Full PDF sent to LLM in **one call**                                                  |
-| PDF **≥ 4 MB** + text layer                | Decoded by `pdf-parse`, split into segments by headings, **one LLM call per segment** |
-| PDF **≥ 4 MB**, image-only (no text layer) | Single-shot fallback — full PDF sent to LLM                                           |
+| Condition      | Strategy                                                           |
+| -------------- | ------------------------------------------------------------------ |
+| PDF **< 2 MB** | Full PDF sent to LLM in **one call**                               |
+| PDF **≥ 2 MB** | Rejected. Pipeline skips extraction because it exceeds size limit. |
 
 ```
 extract.ts → readPdf()              ← now protected by try/catch (logs clean error on ENOENT)
-           → decodePdfToText()     [chunker.ts]  — pdf-parse extracts plain text
-           → segmentDocument()     [chunker.ts]  — splits by heading patterns into segments
-           → extractFromSegments() [extract.ts]  — calls LLM once per segment
-               └─ for each segment:
-                     extractChunksFromDocument()  [llm-client.ts]  ← 1 LLM call
-                         └─ breakerCall()         ← circuit breaker wraps the call
-                         └─ classifyLlmError()    ← auth/rate_limit/token_limit/transient
-                         └─ sleep(attempt)        ← exponential backoff + jitter on retry
-                     deriveChunkId()              [chunker.ts]  ← stable ID from content hash
+           → fallbackExtract()      [extract.ts]  — calls LLM once for the full PDF (if < 2MB)
+               └─ extractChunksFromDocument()  [llm-client.ts]  ← 1 LLM call
+                   └─ breakerCall()         ← circuit breaker wraps the call
+                   └─ classifyLlmError()    ← auth/rate_limit/token_limit/transient
+                   └─ sleep(attempt)        ← exponential backoff + jitter on retry
+               └─ deriveChunkId()           [extract.ts]  ← stable ID from content hash
            → assembleChunkMarkdown() → writeFile(data/chunks/<id>.md)
            → saveGuide()             → writes data/guide.yaml
            → recordExtraction()      → writes source-manifest.json
 ```
 
-**LLM calls in this step:** 1 per segment (or 1 total for small/image-only PDFs)
+**LLM calls in this step:** 1 total (for PDFs < 2MB)
 
 ---
 
@@ -89,10 +85,10 @@ rebuild-guide.ts → reads every .md file in data/chunks/
 
 | Step                       | Calls            |
 | -------------------------- | ---------------- |
-| Extract (N segments)       | N                |
+| Extract                    | 1                |
 | Validate (M active chunks) | up to M          |
 | Relate (M active chunks)   | up to M          |
-| **Total**                  | **N + up to 2M** |
+| **Total**                  | **1 + up to 2M** |
 
 Calls are lower than the max when chunks fail Phase 1 validation (no LLM call attempted) or when LLM errors trigger the fail-safe return path.
 
@@ -118,13 +114,13 @@ source-manifest.json        ← which PDF produced which chunk_ids (for deduplic
 
 ## Files involved
 
-| File                             | What it does                                                                        |
-| -------------------------------- | ----------------------------------------------------------------------------------- |
-| `src/scripts/ingest.ts`          | Orchestrator — runs all 4 scripts in sequence via child process                     |
-| `src/extract.ts`                 | Reads PDF, chooses extraction strategy, saves .md files + guide.yaml                |
-| `src/chunker.ts`                 | pdf-parse text extraction + heading-based segmentation + stable content-hash IDs    |
-| `src/llm-client.ts`              | All LLM calls — circuit breaker, error classification, exponential backoff + jitter |
-| `src/scripts/validate.ts`        | Zod structural check; per-file read guard                                           |
-| `src/scripts/relate.ts`          | LLM-based related_chunks linking; per-file read guard; retry via callLlmWithRetry   |
-| `src/scripts/rebuild-guide.ts`   | Reads all .md front-matter → writes guide.yaml; per-file read guard                 |
-| `src/scripts/source-manifest.ts` | PDF hash + chunk provenance tracking                                                |
+| File                    | What it does                                                         |
+| ----------------------- | -------------------------------------------------------------------- |
+| `src/scripts/ingest.ts` | Orchestrator — runs all 4 scripts in sequence via child process      |
+| `src/extract.ts`        | Reads PDF, chooses extraction strategy, saves .md files + guide.yaml |
+
+| `src/llm-client.ts` | All LLM calls — circuit breaker, error classification, exponential backoff + jitter |
+| `src/scripts/validate.ts` | Zod structural check; per-file read guard |
+| `src/scripts/relate.ts` | LLM-based related_chunks linking; per-file read guard; retry via callLlmWithRetry |
+| `src/scripts/rebuild-guide.ts` | Reads all .md front-matter → writes guide.yaml; per-file read guard |
+| `src/scripts/source-manifest.ts` | PDF hash + chunk provenance tracking |

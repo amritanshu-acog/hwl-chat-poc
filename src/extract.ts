@@ -1,3 +1,4 @@
+import { createHash } from "crypto";
 import { readFile, writeFile, mkdir, readdir, stat, unlink } from "fs/promises";
 import { join, resolve, extname, basename } from "path";
 import { extractChunksFromDocument } from "./llm-client.js";
@@ -11,16 +12,39 @@ import {
   getChunkIdsForSource,
 } from "./scripts/source-manifest.js";
 import {
-  decodePdfToText,
-  segmentDocument,
-  logSegmentSummary,
-  deriveChunkId,
-  type DocumentSegment,
-} from "./chunker.js";
-import { renderPrompt } from "./prompt-loader.js";
-import { parseGuideEntries, serializeGuideEntries } from "./guide-parser.js";
+  parseGuideEntries,
+  serializeGuideEntries,
+} from "./utils/guide-parser.js";
 import { CONFIG } from "./config.js";
 import { logger, childLogger } from "./logger.js";
+
+/** Slugify text into lowercase-hyphen form. */
+function slugify(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, "")
+    .trim()
+    .replace(/[\s]+/g, "-")
+    .replace(/-+/g, "-")
+    .slice(0, 50)
+    .replace(/^-|-$/g, "");
+}
+
+/**
+ * Derive a stable chunk ID: `{slug}-{8-char hash}`.
+ * Hash input is `basename(source) + topic` — deterministic per document+topic.
+ */
+function deriveChunkId(
+  source: string,
+  topic: string,
+  llmSlug?: string,
+): string {
+  const shortHash = createHash("sha256")
+    .update(basename(source) + topic)
+    .digest("hex")
+    .slice(0, 8);
+  return `${slugify(llmSlug ?? topic)}-${shortHash}`;
+}
 
 // ─── Markdown chunk assembler ──────────────────────────────────────────────────
 
@@ -150,51 +174,7 @@ async function fallbackExtract(
   return chunks;
 }
 
-async function extractFromSegments(
-  segments: DocumentSegment[],
-  base64: string,
-  source: string,
-  extractionType: "procedure" | "qna" | "chat" = "procedure",
-): Promise<LLMChunkOutput[]> {
-  const allChunks: LLMChunkOutput[] = [];
-  logger.info("Segment-level extraction started", {
-    totalSegments: segments.length,
-    extractionType,
-  });
-
-  for (const seg of segments) {
-    const t0 = Date.now();
-    const promptName =
-      extractionType === "qna" ? "segment-qna" : "segment-procedure";
-    const segmentPrompt = await renderPrompt(promptName, {
-      HEADING: seg.headingPath.join(" › "),
-      PAGES: `${seg.pageRange.start}–${seg.pageRange.end}`,
-      CONTENT: seg.content,
-    });
-
-    try {
-      const chunks = await extractChunksFromDocument(
-        extractionType === "qna" ? "" : base64,
-        segmentPrompt,
-        extractionType,
-      );
-      logger.debug("Segment LLM call complete", {
-        segmentId: seg.stableChunkId,
-        durationMs: Date.now() - t0,
-        chunksProduced: chunks.length,
-      });
-      allChunks.push(...chunks);
-    } catch (err) {
-      logger.warn("Segment extraction failed", {
-        segmentId: seg.stableChunkId,
-        durationMs: Date.now() - t0,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-  }
-
-  return allChunks;
-}
+// Removed extractFromSegments
 
 // ─── Core extraction pipeline ──────────────────────────────────────────────────
 
@@ -248,44 +228,20 @@ async function extractSingle(
     }
   }
 
-  // Choose extraction strategy
+  // Check file size, only allow < 2MB PDFs
   let chunks: LLMChunkOutput[];
   const isSmallPdf = buf.length < 2 * 1024 * 1024;
 
   if (isSmallPdf) {
     chunks = await fallbackExtract(content, source, extractionType);
   } else {
-    const pdfText = await decodePdfToText(content);
-    if (pdfText.length > CONFIG.extraction.minTextLengthForSegmentation) {
-      const docTitle = basename(source).replace(/\.pdf$/i, "");
-      const segments = segmentDocument(pdfText, docTitle);
-      logSegmentSummary(segments);
-
-      const tempPath = CONFIG.paths.temp[extractionType];
-      await mkdir(tempPath, { recursive: true });
-      for (const seg of segments) {
-        await writeFile(
-          join(tempPath, `${seg.stableChunkId}.txt`),
-          seg.content,
-          "utf-8",
-        );
-      }
-
-      chunks =
-        segments.length === 0
-          ? await fallbackExtract(content, source, extractionType)
-          : await extractFromSegments(
-              segments,
-              content,
-              source,
-              extractionType,
-            );
-    } else {
-      log.warn("No text layer found — using single-shot LLM extraction", {
-        textLength: pdfText.length,
-      });
-      chunks = await fallbackExtract(content, source, extractionType);
-    }
+    log.error(
+      "File is larger than 2MB. Skipping extraction because it exceeds size limit.",
+      {
+        sizeMB: (buf.length / (1024 * 1024)).toFixed(2),
+      },
+    );
+    return { saved: 0, newCount: 0, updatedCount: 0, chunkIds: [] };
   }
 
   if (chunks.length === 0) {

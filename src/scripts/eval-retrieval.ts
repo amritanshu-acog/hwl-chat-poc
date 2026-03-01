@@ -90,7 +90,7 @@ async function main() {
   }
 
   // Load test queries
-  const queriesPath = join(process.cwd(), "data", "test-queries.json");
+  const queriesPath = join(process.cwd(), "test-queries.json");
   let queries: TestQuery[];
   try {
     const raw = await readFile(queriesPath, "utf-8");

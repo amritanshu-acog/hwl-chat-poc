@@ -45,7 +45,6 @@ troubleshooting-poc/
 │   ├── config.ts           ← Centralized pipeline + server configuration (all env var defaults)
 │   ├── schemas.ts          ← Zod type definitions for chunks, guide entries, LLM output
 │   ├── providers.ts        ← Provider registry (Azure / Google / Groq)
-│   ├── chunker.ts          ← Deterministic heading-based document segmentation engine
 │   ├── logger.ts           ← Winston logger with AsyncLocalStorage request correlation
 │   │
 │   ├── prompts/
@@ -60,11 +59,9 @@ troubleshooting-poc/
 │       ├── relate.ts          ← Find related chunks and wire them together
 │       ├── rebuild-guide.ts   ← Rebuild guide.yaml from active chunk front matter
 │       ├── validate-guide.ts  ← Fast Zod-only check on guide.yaml structure
-│       ├── perf-report.ts     ← Aggregate timing metrics from ingestion reports
-│       ├── e2e-test.ts        ← Structural regression tests (no LLM, runs in seconds)
+│       ├── test.ts            ← Structural regression tests (no LLM, runs in seconds)
 │       ├── eval-retrieval.ts  ← Retrieval accuracy evaluation (requires test-queries.json)
 │       ├── source-manifest.ts ← Track which PDF produced which chunks
-│       ├── chunk-debug.ts     ← PDF segmentation preview (no LLM)
 │       └── delete.ts          ← Remove a chunk from the KB and resync guide.yaml
 │
 ├── source-manifest.json    ← Created at runtime. Maps PDF → chunk_ids + hash
@@ -296,32 +293,7 @@ bun run validate-guide
 
 ---
 
-### 7. `bun run perf-report`
-
-**What it does:** Reads structured ingestion reports from `data/reports/` and aggregates metrics, providing an average duration summary for each pipeline step across runs.
-
-```bash
-bun run perf-report
-```
-
-**Expected output:**
-
-```
-📊 HWL Ingestion Performance Report
-════════════════════════════════════════
-  Processed Runs:  1
-  Total Sources:   1
-  Avg Run Time:    116.7s
-
-  Average Time per Step:
-    • extract         100.9s
-    • validate        10.1s
-...
-```
-
----
-
-### 8. `bun run e2e-test` (also `bun run test`)
+### 7. `bun run test`
 
 **What it does:** Full structural regression test. Checks that:
 
@@ -336,7 +308,7 @@ bun run perf-report
 No LLM calls. Runs in under 3 seconds.
 
 ```bash
-bun run e2e-test
+bun run test
 ```
 
 **Expected output (healthy KB):**
@@ -380,7 +352,7 @@ bun run e2e-test
 
 ---
 
-### 9. `bun run server`
+### 8. `bun run server`
 
 **What it does:** Starts the HTTP API server on port 3000 (or `PORT` env var).
 
@@ -445,7 +417,7 @@ The `X-Request-Id` response header carries a short ID that correlates all server
 
 ---
 
-### 10. `bun run chat`
+### 9. `bun run chat`
 
 **What it does:** Interactive terminal chat. Type questions, get answers. No server needed.
 
@@ -489,7 +461,7 @@ Assistant:
 
 ---
 
-### 11. `bun run delete`
+### 10. `bun run delete`
 
 **What it does:** Removes a chunk by chunk_id from both `data/chunks/` and `guide.yaml`.
 
@@ -507,7 +479,7 @@ bun run delete timecard-invoices-process
 
 ---
 
-### 12. `bun run score`
+### 11. `bun run score`
 
 **What it does:** Runs the automated retrieval accuracy evaluation script (`eval-retrieval.ts`). It loads the "Gold Standard" list of test questions from `data/test-queries.json` and checks if the AI's retrieval engine successfully pulls the expected chunk ID for every question.
 
@@ -557,7 +529,7 @@ bun install
 bun run ingest ./your-manual.pdf
 
 # 4. Verify everything is healthy
-bun run e2e-test
+bun run test
 
 # 5. Start the server
 bun run server

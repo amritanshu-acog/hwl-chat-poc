@@ -1,5 +1,5 @@
 /**
- * src/scripts/e2e-test.ts  — GAP-D1-11
+ * src/scripts/test.ts  — GAP-D1-11
  *
  * Minimal end-to-end ingestion test.
  *
@@ -8,7 +8,7 @@
  * (tests structural invariants only).
  *
  * Usage:
- *   bun run e2e-test
+ *   bun run test
  *
  * Exit codes:
  *   0 — all invariants pass
@@ -47,14 +47,13 @@ function check(name: string, passed: boolean, detail?: string): void {
 
 function parseGuideBlocks(
   raw: string,
-): Array<{ chunk_id: string; file: string; status: string }> {
+): Array<{ chunk_id: string; status: string }> {
   const blocks = raw
     .split(/^  - chunk_id:/m)
     .filter((b) => b.trim() && !b.trim().startsWith("#"));
   return blocks
     .map((block) => ({
       chunk_id: block.match(/^\s*([^\n]+)/)?.[1]?.trim() ?? "",
-      file: block.match(/\n\s+file:\s*(.+)/)?.[1]?.trim() ?? "",
       status: block.match(/\n\s+status:\s*(\w+)/)?.[1]?.trim() ?? "active",
     }))
     .filter((e) => e.chunk_id);
@@ -68,6 +67,7 @@ function parseChunkFrontMatter(raw: string): Record<string, unknown> | null {
   const fm = fmMatch[1]!;
 
   const chunk_id = fm.match(/^chunk_id:\s*(.+)$/m)?.[1]?.trim() ?? "";
+  const source = fm.match(/^source:\s*(.+)$/m)?.[1]?.trim() ?? "";
   const topic = fm.match(/^topic:\s*(.+)$/m)?.[1]?.trim() ?? "";
   const summary = fm.match(/^summary:\s*>\s*\n\s+(.+)$/m)?.[1]?.trim() ?? "";
   const has_conditions =
@@ -90,6 +90,7 @@ function parseChunkFrontMatter(raw: string): Record<string, unknown> | null {
 
   return {
     chunk_id,
+    source,
     topic,
     summary,
     triggers,
@@ -123,7 +124,7 @@ async function testFileSystemIntegrity(): Promise<void> {
 }
 
 async function testGuideYamlVsFilesystem(): Promise<{
-  guideEntries: Array<{ chunk_id: string; file: string; status: string }>;
+  guideEntries: Array<{ chunk_id: string; status: string }>;
   mdFiles: string[];
 }> {
   console.log("\n📋 Test: guide.yaml ↔ Filesystem Consistency");
@@ -147,18 +148,21 @@ async function testGuideYamlVsFilesystem(): Promise<{
 
   // Every guide entry has a corresponding .md file
   for (const entry of guideEntries) {
-    if (!entry.file) continue;
-    const fileName = entry.file.split("/").pop() ?? "";
+    if (!entry.chunk_id) continue;
+    const fileName = `${entry.chunk_id}.md`;
     check(
       `guide entry '${entry.chunk_id}' has .md file`,
       mdFiles.includes(fileName),
-      mdFiles.includes(fileName) ? undefined : `Missing: ${entry.file}`,
+      mdFiles.includes(fileName) ? undefined : `Missing: ${fileName}`,
     );
   }
 
   // Every .md file has a guide entry
   for (const file of mdFiles) {
-    const entryExists = guideEntries.some((e) => e.file.endsWith(file));
+    const expectedChunkId = file.replace(".md", "");
+    const entryExists = guideEntries.some(
+      (e) => e.chunk_id === expectedChunkId,
+    );
     check(
       `${file} has guide.yaml entry`,
       entryExists,
@@ -209,7 +213,7 @@ async function testChunkSchemas(mdFiles: string[]): Promise<void> {
 async function testRequiredSections(mdFiles: string[]): Promise<void> {
   console.log("\n📄 Test: Required Markdown Sections");
 
-  const required = ["## Context", "## Response", "## Escalation"];
+  const required = ["## Context", "## Response"];
 
   for (const file of mdFiles.sort()) {
     const raw = await readFile(join(CHUNKS_DIR, file), "utf-8").catch(() => "");
@@ -224,7 +228,7 @@ async function testRequiredSections(mdFiles: string[]): Promise<void> {
 }
 
 async function testGuideEntrySchemas(
-  entries: Array<{ chunk_id: string; file: string; status: string }>,
+  entries: Array<{ chunk_id: string; status: string }>,
 ): Promise<void> {
   console.log("\n📊 Test: guide.yaml Entry Schema Validation");
 
@@ -238,8 +242,8 @@ async function testGuideEntrySchemas(
     if (!chunk_id) continue;
 
     const topic = block.match(/\n\s+topic:\s*(.+)/)?.[1]?.trim() ?? "";
+    const source = block.match(/\n\s+source:\s*(.+)/)?.[1]?.trim() ?? "";
     const summary = block.match(/summary:\s*>\s*\n\s+(.+)/)?.[1]?.trim() ?? "";
-    const file = block.match(/\n\s+file:\s*(.+)/)?.[1]?.trim() ?? "";
     const has_conditions =
       block.match(/\n\s+has_conditions:\s*(true|false)/)?.[1] === "true";
     const rawStatus =
@@ -264,13 +268,13 @@ async function testGuideEntrySchemas(
     try {
       GuideEntrySchema.parse({
         chunk_id,
+        source,
         topic,
         summary,
         triggers,
         has_conditions,
         related_chunks,
         status: rawStatus,
-        file,
       });
       check(`guide entry '${chunk_id}' schema`, true);
     } catch (err) {

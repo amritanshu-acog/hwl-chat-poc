@@ -281,6 +281,6 @@ At the end of every `bun run ingest` run, a JSON file is written to `data/report
 | ----------------------------- | ------------------------------------------------------------------------------------------- |
 | Image extraction              | Not implemented. LLM reads images and writes context summary inline.                        |
 | Q&A extraction (`--type=qna`) | Prompt exists (`qna-extraction.md`). Not tested end-to-end.                                 |
-| Files > 2 MB                  | Handled by segmentation path (chunker); out of current scope.                               |
+| Files > 2 MB                  | Explicitly rejected to maintain simplicity.                                                 |
 | Embedding-based retrieval     | Not yet. Guide YAML sent whole to LLM for retrieval. Warning fires at >80 chunks or >30 KB. |
 | Multi-instance rate limiting  | In-memory only. Needs Redis for horizontal scaling.                                         |

@@ -1,0 +1,75 @@
+[
+    {
+        "question": "How do I add a new candidate to the staff pool so they can be ready for requisitions?",
+        "expected_chunk_ids": [
+            "add-candidate-to-staff-pool-615b9bb8"
+        ],
+        "notes": "Testing basic staff pool addition retrieval."
+    },
+    {
+        "question": "What happens when a timecard is in the approved tab? Are they ready for invoicing?",
+        "expected_chunk_ids": [
+            "approved-timecards-overview-11d0a041",
+            "timecards-overview-a4bfe94b"
+        ],
+        "notes": "Testing approved timecards and general overview."
+    },
+    {
+        "question": "I want to change my email notifications to only send me alerts for specific job titles, not all of them. How do I do that?",
+        "expected_chunk_ids": [
+            "email-preference-management-cc26946e",
+            "update-email-preferences-manual-9ee9fd8b"
+        ],
+        "notes": "Testing manual email preference update."
+    },
+    {
+        "question": "What is the process to map my agency profile to specific facilities, like including or excluding them?",
+        "expected_chunk_ids": [
+            "self-facility-location-mapping-91d2d191",
+            "self-mapping-facility-071bb8c4"
+        ],
+        "notes": "Testing self-mapping functionality retrieval."
+    },
+    {
+        "question": "How do I propose someone for a requisition after the initial setup?",
+        "expected_chunk_ids": [
+            "propose-candidate-process-07437bd9"
+        ],
+        "notes": "Testing direct propose candidate process."
+    },
+    {
+        "question": "Where can I find the BI reports on the system dashboard?",
+        "expected_chunk_ids": [
+            "dashboard-bi-reporting-ccf5b116"
+        ],
+        "notes": "Testing BI dashboard reporting retrieval."
+    },
+    {
+        "question": "How do I upload proposal documents, like a resume, to a candidate's profile?",
+        "expected_chunk_ids": [
+            "upload-proposal-documents-f66e0bdd"
+        ],
+        "notes": "Testing document upload retrieval."
+    },
+    {
+        "question": "I need to reset my password for the first time login. What are the steps?",
+        "expected_chunk_ids": [
+            "initial-access-password-reset-1602e531"
+        ],
+        "notes": "Testing initial access and password reset."
+    },
+    {
+        "question": "What do the buttons in the Candidate Status column actually do?",
+        "expected_chunk_ids": [
+            "candidate-status-buttons-56d0fa74"
+        ],
+        "notes": "Testing candidate status actions."
+    },
+    {
+        "question": "Can I edit or reject a timecard that has already been submitted to the facility?",
+        "expected_chunk_ids": [
+            "submitted-timecard-actions-f539e5db"
+        ],
+        "notes": "Testing submitted timecard actions capability."
+    }
+]

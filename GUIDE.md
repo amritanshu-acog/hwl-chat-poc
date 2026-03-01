@@ -114,11 +114,10 @@ The system operates in two distinct phases:
 
 Feed it PDF documents. The extraction strategy is chosen automatically based on file size:
 
-| Condition                                  | Strategy                                                             |
-| ------------------------------------------ | -------------------------------------------------------------------- |
-| PDF **< 2 MB**                             | Full PDF sent to the LLM in a **single call**                        |
-| PDF **≥ 2 MB** with a text layer           | Segmented by headings via the chunker — **one LLM call per segment** |
-| PDF **≥ 2 MB**, image-only (no text layer) | Single-shot fallback — full PDF sent to LLM                          |
+| Condition      | Strategy                                                           |
+| -------------- | ------------------------------------------------------------------ |
+| PDF **< 2 MB** | Full PDF sent to the LLM in a **single call**                      |
+| PDF **≥ 2 MB** | Rejected. Pipeline skips extraction because it exceeds size limit. |
 
 The pipeline then runs four steps in sequence:
 
@@ -225,27 +224,26 @@ All commands run from the project root with `bun run <name>`.
 
 > Use `bun run ingest` instead unless you need to re-run a specific step.
 
-| Command                             | Step | Description                                                                                         |
-| ----------------------------------- | ---- | --------------------------------------------------------------------------------------------------- |
-| `bun run extract <path>`            | 1/4  | PDF → chunk `.md` files. Small PDFs go directly to LLM; large PDFs are segmented by headings first. |
-| `bun run extract --type=qna <path>` | 1/4  | Same strategy using the Q&A/FAQ extraction prompt.                                                  |
-| `bun run validate`                  | 2/4  | Instant Zod structure check.                                                                        |
-| `bun run relate`                    | 3/4  | LLM pass to populate `related_chunks` fields across the knowledge base.                             |
-| `bun run rebuild`                   | 4/4  | Regenerates `guide.yaml` from all active chunk front matter. Run after any manual chunk edits.      |
+| Command                             | Step | Description                                                                                    |
+| ----------------------------------- | ---- | ---------------------------------------------------------------------------------------------- |
+| `bun run extract <path>`            | 1/4  | PDF → chunk `.md` files. Only PDFs < 2MB are supported; they go directly to LLM.               |
+| `bun run extract --type=qna <path>` | 1/4  | Same strategy using the Q&A/FAQ extraction prompt.                                             |
+| `bun run validate`                  | 2/4  | Instant Zod structure check.                                                                   |
+| `bun run relate`                    | 3/4  | LLM pass to populate `related_chunks` fields across the knowledge base.                        |
+| `bun run rebuild`                   | 4/4  | Regenerates `guide.yaml` from all active chunk front matter. Run after any manual chunk edits. |
 
 ### Testing & Evaluation
 
-| Command            | Description                                                                                                                                   |
-| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `bun run e2e-test` | Structural integrity checks. Verifies `guide.yaml` ↔ `data/chunks/` alignment, schema, required sections. Zero LLM cost.                      |
-| `bun run score`    | Runs retrieval accuracy evaluation against `data/test-queries.json`. Outputs a percentage accuracy score. Requires a gold-standard query set. |
+| Command         | Description                                                                                                                                   |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bun run test`  | Structural integrity checks. Verifies `guide.yaml` ↔ `data/chunks/` alignment, schema, required sections. Zero LLM cost.                      |
+| `bun run score` | Runs retrieval accuracy evaluation against `data/test-queries.json`. Outputs a percentage accuracy score. Requires a gold-standard query set. |
 
 ### Utilities & Maintenance
 
-| Command                     | Description                                                                                                                                                       |
-| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `bun run chunk <pdf>`       | Debug tool. Segments a PDF and saves each block as a `.txt` file to `data/debug-chunks/` — shows exactly what text the LLM will see, without making any LLM call. |
-| `bun run delete <chunk_id>` | Safely removes a chunk's `.md` file and re-syncs `guide.yaml`. Never delete chunks manually.                                                                      |
+| Command                     | Description                                                                                  |
+| --------------------------- | -------------------------------------------------------------------------------------------- |
+| `bun run delete <chunk_id>` | Safely removes a chunk's `.md` file and re-syncs `guide.yaml`. Never delete chunks manually. |
 
 ---
 
@@ -259,13 +257,10 @@ flowchart TD
 
     B --> C{PDF size?}
 
-    C -->|"< 4 MB"| D["Single-shot\nFull PDF → LLM in one call"]
-    C -->|">= 4 MB + text layer"| E["chunker.ts\npdf-parse → plain text\nsegmentDocument: split by headings\nSave segments → temp/<type>/\nOne LLM call per segment"]
-    C -->|">= 4 MB, image-only"| F["Single-shot fallback\nFull PDF → LLM"]
+    C -->|"< 2 MB"| D["Single-shot\nFull PDF → LLM in one call"]
+    C -->|">= 2 MB"| F["Rejected (exceeds size limit)"]
 
     D --> G["LLM returns chunk JSON\nZod-validated\nStable IDs derived from content hash\ndata/chunks/<id>.md written\nguide.yaml + source-manifest.json updated"]
-    E --> G
-    F --> G
 
     G --> H["[2] validate.ts\nZod structural check (no LLM)\nFailed chunks tagged status: review"]
 
@@ -431,11 +426,7 @@ troubleshooting-poc/
 │   ├── qna/                    ← Drop FAQ PDFs here
 │   └── chat/                   ← Chat exports (future use)
 │
-├── temp/                       ← Intermediate text segments from chunker (auto-cleaned)
-│   ├── procedure/
-│   ├── qna/
-│   └── chat/
-│
+
 ├── logs/
 │   └── app.log                 ← Winston structured log (10 MB rolling, 5 files max)
 │
@@ -444,7 +435,6 @@ troubleshooting-poc/
 │   ├── main.ts                 ← Interactive CLI chat
 │   ├── extract.ts              ← PDF → chunk extraction orchestrator
 │   ├── llm-client.ts           ← All LLM calls — circuit breaker, error classification, backoff
-│   ├── chunker.ts              ← Deterministic PDF segmentation engine (heading-based)
 │   ├── schemas.ts              ← Zod schemas (chunks, guide entries, chat responses)
 │   ├── providers.ts            ← LLM provider registry (Azure / Google / Groq)
 │   ├── config.ts               ← All configurable values — edit here or override via env vars
@@ -464,8 +454,7 @@ troubleshooting-poc/
 │       ├── rebuild-guide.ts    ← guide.yaml regeneration from chunk front matter
 │       ├── source-manifest.ts  ← PDF → chunk provenance tracking helpers
 │       ├── eval-retrieval.ts   ← Retrieval accuracy scoring against a gold query set
-│       ├── e2e-test.ts         ← Structural regression tests (no LLM)
-│       ├── chunk-debug.ts      ← PDF segmentation preview (shows exact LLM input, no LLM call)
+│       ├── test.ts             ← Structural regression tests (no LLM)
 │       └── delete.ts           ← Safe chunk removal + guide.yaml re-sync
 │
 ├── source-manifest.json        ← Maps source PDFs to the chunk IDs they produced

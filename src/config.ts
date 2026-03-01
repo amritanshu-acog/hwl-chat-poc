@@ -10,14 +10,6 @@ const PROJECT_ROOT = process.env.PROJECT_ROOT ?? process.cwd();
  * Ingestion pipeline configuration (Task 3: centralize configuration)
  */
 export const CONFIG = {
-  // ─── Document Segmentation (chunker.ts) ──────────────────────────────────────
-  segmenter: {
-    // Segments shorter than this merge with the next one
-    minSegmentChars: 300,
-    // Segments longer than this are candidates for sub-splitting
-    maxSegmentChars: 8000,
-  },
-
   // ─── Paths ───────────────────────────────────────────────────────────────────
   paths: {
     data: join(PROJECT_ROOT, "data"),
@@ -35,9 +27,6 @@ export const CONFIG = {
 
   // ─── Extraction settings ──────────────────────────────────────────────────────
   extraction: {
-    // Minimum text length to attempt structural segmentation
-    minTextLengthForSegmentation: 200,
-
     // Maximum tokens to request from the LLM during chunk extraction.
     // A single-shot extraction over a multi-section PDF can produce very long
     // JSON arrays; without an explicit ceiling the provider often truncates the

@@ -35,14 +35,13 @@ interface RawEntry {
 
   related_chunks: string[];
   status: string;
-  file: string;
 }
 
 function parseGuideBlock(block: string): RawEntry | null {
   const chunk_id = block.match(/^\s*([^\n]+)/)?.[1]?.trim() ?? "";
   const topic = block.match(/\n\s+topic:\s*(.+)/)?.[1]?.trim() ?? "";
+  const source = block.match(/\n\s+source:\s*(.+)/)?.[1]?.trim() ?? "";
   const summary = block.match(/summary:\s*>\s*\n\s+(.+)/)?.[1]?.trim() ?? "";
-  const file = block.match(/\n\s+file:\s*(.+)/)?.[1]?.trim() ?? "";
   const has_conditions =
     block.match(/\n\s+has_conditions:\s*(true|false)/)?.[1] === "true";
   const rawStatus =
@@ -75,7 +74,6 @@ function parseGuideBlock(block: string): RawEntry | null {
     has_conditions,
     related_chunks,
     status: rawStatus,
-    file,
   };
 }
 

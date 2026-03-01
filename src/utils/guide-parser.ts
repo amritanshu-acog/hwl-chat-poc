@@ -1,4 +1,4 @@
-import type { GuideEntry } from "./schemas.js";
+import type { GuideEntry } from "../schemas.js";
 
 /**
  * Parse raw guide.yaml text into structured GuideEntry objects.

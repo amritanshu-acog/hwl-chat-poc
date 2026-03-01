@@ -21,11 +21,8 @@ An LLM-powered helpdesk assistant that extracts knowledge from PDFs and determin
 - `bun run server` — Runs the HTTP API server.
 - `bun run chat [--debug]` — CLI chat (use `--debug` to see the exact evidence chunks the AI read).
 - `bun run score` — Evaluates retrieval accuracy against `data/test-queries.json`.
-- `bun run e2e-test` — Instant structural integrity regression check of the knowledge base.
+- `bun run test` — Instant structural integrity regression check of the knowledge base.
 - `bun run chunk <pdf>` — Debug tool to visually preview how a PDF is chunked before LLM extraction.
-
-_(For a complete list of all 12 scripts, read [scripts.md](./scripts.md))_
-_(For deeply detailed technical documentation, read [HELP.md](./HELP.md))_
 
 ## 🔌 API Integration (`POST /api/chat`)
 
