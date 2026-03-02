@@ -1,5 +1,5 @@
 /**
- * generation/src/core/logger.ts
+ * generation/s../core/logger.ts
  *
  * Per-stage logger factory.
  *

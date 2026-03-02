@@ -1,5 +1,5 @@
 /**
- * generation/src/core/config.ts
+ * generation/s../core/config.ts
  *
  * Reads generation/config.toml at startup and exports a typed CONFIG object.
  * All pipeline code imports from here — no raw TOML parsing elsewhere.

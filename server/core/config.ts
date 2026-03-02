@@ -16,7 +16,7 @@ export const CONFIG = {
     chunks: join(PROJECT_ROOT, "generation", "output", "final"),
     guide: join(PROJECT_ROOT, "generation", "output", "final", "guide.yaml"),
     manifest: join(PROJECT_ROOT, "source-manifest.json"),
-    prompts: join(PROJECT_ROOT, "src", "prompts"),
+    prompts: join(PROJECT_ROOT, "server", "prompts"),
     reports: join(PROJECT_ROOT, "data", "reports"),
     temp: {
       procedure: join(PROJECT_ROOT, "temp", "procedure"),

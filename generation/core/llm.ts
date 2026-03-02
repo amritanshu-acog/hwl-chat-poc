@@ -1,5 +1,5 @@
 /**
- * generation/src/core/llm.ts
+ * generation/s../core/llm.ts
  *
  * Thin LLM client for the generation pipeline.
  *
