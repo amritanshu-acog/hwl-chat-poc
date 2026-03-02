@@ -1,5 +1,5 @@
 /**
- * generation/src/pipeline/quality.ts
+ * generation/pipeline/quality.ts
  *
  * Quality stage — §5 of the design spec.
  *

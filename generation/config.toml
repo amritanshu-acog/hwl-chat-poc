@@ -19,11 +19,11 @@ guide                 = "generation/output/final/guide.yaml"
 # ── Prompts ───────────────────────────────────────────────────────────────────
 
 [prompts]
-procedure         = "generation/prompt/procedure.md"
-qna               = "generation/prompt/qna.md"
-heading           = "generation/prompt/heading.md"
-generate_rules    = "generation/prompt/generate_rules.md"
-normalize_triggers = "generation/prompt/normalize_triggers.md"
+procedure         = "generation/prompts/procedure.md"
+qna               = "generation/prompts/qna.md"
+heading           = "generation/prompts/heading.md"
+generate_rules    = "generation/prompts/generate_rules.md"
+normalize_triggers = "generation/prompts/normalize_triggers.md"
 
 # ── LLM Models ────────────────────────────────────────────────────────────────
 # chunk  — used for all chunking calls (single pass, two-pass section loop, TOC)

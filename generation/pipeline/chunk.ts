@@ -1,5 +1,5 @@
 /**
- * generation/src/pipeline/chunk.ts
+ * generation/pipeline/chunk.ts
  *
  * Chunk stage — §4 of the design spec.
  *

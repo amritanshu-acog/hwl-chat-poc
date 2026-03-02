@@ -1,5 +1,5 @@
 /**
- * generation/src/pipeline/archive.ts
+ * generation/pipeline/archive.ts
  *
  * Archive stage — §2 Document Lifecycle.
  *

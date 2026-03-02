@@ -1,9 +1,9 @@
 /**
- * generation/src/pipeline/delete.ts
+ * generation/pipeline/delete.ts
  *
  * Delete stage — §9 of the design spec.
  *
- * Usage: bun generation/src/pipeline/delete.ts "My Document.pdf"
+ * Usage: bun generation/pipeline/delete.ts "My Document.pdf"
  *
  * 1. Load guide.yaml — find all chunks with source == <pdf_filename>
  * 2. If none found → return (no-op)
@@ -304,10 +304,10 @@ if (import.meta.main) {
   const source = process.argv[2];
   if (!source) {
     console.error(
-      "Usage: bun generation/src/pipeline/delete.ts <pdf_filename>",
+      "Usage: bun generation/pipeline/delete.ts <pdf_filename>",
     );
     console.error(
-      'Example: bun generation/src/pipeline/delete.ts "My Document.pdf"',
+      'Example: bun generation/pipeline/delete.ts "My Document.pdf"',
     );
     process.exit(1);
   }

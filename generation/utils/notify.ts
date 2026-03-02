@@ -1,5 +1,5 @@
 /**
- * generation/src/utils/notify.ts
+ * generation/utils/notify.ts
  *
  * Notification hook (stub).
  *

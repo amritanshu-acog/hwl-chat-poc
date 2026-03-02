@@ -1,5 +1,5 @@
 /**
- * generation/src/pipeline/related-chunks.ts
+ * generation/pipeline/related-chunks.ts
  *
  * Related Chunks Computation — §8 of the design spec.
  *

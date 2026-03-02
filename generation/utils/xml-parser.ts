@@ -1,5 +1,5 @@
 /**
- * generation/src/utils/xml-parser.ts
+ * generation/utils/xml-parser.ts
  *
  * Parses the XML envelope returned by the LLM chunking calls.
  *

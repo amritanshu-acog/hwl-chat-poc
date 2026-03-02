@@ -1,5 +1,5 @@
 /**
- * generation/src/pipeline/run.ts
+ * generation/pipeline/run.ts
  *
  * Pipeline Orchestrator — §3 of the design spec.
  *
@@ -9,9 +9,9 @@
  * Each doc type is independent — failure of one does not block the other.
  *
  * Usage:
- *   bun generation/src/pipeline/run.ts
- *   bun generation/src/pipeline/run.ts --doc-type=procedure
- *   bun generation/src/pipeline/run.ts --doc-type=qna
+ *   bun generation/pipeline/run.ts
+ *   bun generation/pipeline/run.ts --doc-type=procedure
+ *   bun generation/pipeline/run.ts --doc-type=qna
  */
 
 import { makeLogger } from "../core/logger.js";

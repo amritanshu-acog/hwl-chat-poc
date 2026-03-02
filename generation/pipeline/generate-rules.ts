@@ -1,5 +1,5 @@
 /**
- * generation/src/pipeline/generate-rules.ts
+ * generation/pipeline/generate-rules.ts
  *
  * Generate Rules stage — §6 of the design spec.
  *
@@ -8,7 +8,7 @@
  * and writes rules/procedure_rules.json and rules/qna_rules.json.
  *
  * Run once at setup; re-run whenever prompts change.
- * Usage: bun generation/src/pipeline/generate-rules.ts
+ * Usage: bun generation/pipeline/generate-rules.ts
  */
 
 import { writeFile, mkdir } from "fs/promises";

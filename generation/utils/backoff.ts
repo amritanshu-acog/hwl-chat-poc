@@ -1,5 +1,5 @@
 /**
- * generation/src/utils/backoff.ts
+ * generation/utils/backoff.ts
  *
  * Rate-limit backoff with the fixed sequence defined in §14:
  *   5s → 10s → 20s → 40s → 60s → final attempt

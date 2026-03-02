@@ -1,5 +1,5 @@
 /**
- * src/logger.ts
+ * server/core/logger.ts
  *
  * Structured Log4j-style logger built on Winston.
  *

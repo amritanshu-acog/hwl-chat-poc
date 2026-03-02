@@ -1,5 +1,5 @@
 /**
- * generation/src/pipeline/compile.ts
+ * generation/pipeline/compile.ts
  *
  * Compile stage — §7 of the design spec.
  *
