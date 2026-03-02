@@ -1,6 +1,6 @@
 import { readFile } from "fs/promises";
 import { join } from "path";
-import { CONFIG } from "../config.js";
+import { CONFIG } from "../core/config.js";
 
 const PROMPTS_DIR = CONFIG.paths.prompts;
 const promptCache = new Map<string, string>();

@@ -1,4 +1,4 @@
-import type { GuideEntry } from "../schemas.js";
+import type { GuideEntry } from "../core/schemas.js";
 
 /**
  * Parse raw guide.yaml text into structured GuideEntry objects.
@@ -7,7 +7,7 @@ import type { GuideEntry } from "../schemas.js";
 export function parseGuideEntries(raw: string): GuideEntry[] {
   const entries: GuideEntry[] = [];
   const blocks = raw
-    .split(/^  - chunk_id:/m)
+    .split(/^\s*- chunk_id:/m)
     .filter((b) => b.trim() && !b.trim().startsWith("#"));
 
   for (const block of blocks) {

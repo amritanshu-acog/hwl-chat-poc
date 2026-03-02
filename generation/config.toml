@@ -1,0 +1,88 @@
+# ── Directories ────────────────────────────────────────────────────────────────
+# All paths are relative to the project root (where this file lives).
+
+[directories]
+input_procedure       = "generation/input/procedure"
+input_qna             = "generation/input/qna"
+processed             = "generation/input/processed"
+output_chunk          = "generation/output/chunk"
+output_heading        = "generation/output/chunk/heading"
+output_quality_pass   = "generation/output/quality/pass"
+output_quality_fail   = "generation/output/quality/fail"
+output_quality_reports = "generation/output/quality/reports"
+final                 = "generation/output/final"
+final_backup          = "generation/output/final/backup"
+final_reports         = "generation/output/final/reports"
+log                   = "generation/output/log"
+guide                 = "generation/output/final/guide.yaml"
+
+# ── Prompts ───────────────────────────────────────────────────────────────────
+
+[prompts]
+procedure         = "generation/prompt/procedure.md"
+qna               = "generation/prompt/qna.md"
+heading           = "generation/prompt/heading.md"
+generate_rules    = "generation/prompt/generate_rules.md"
+normalize_triggers = "generation/prompt/normalize_triggers.md"
+
+# ── LLM Models ────────────────────────────────────────────────────────────────
+# chunk  — used for all chunking calls (single pass, two-pass section loop, TOC)
+# quality — used for generate_rules and related_chunks normalisation
+
+[models]
+chunk   = "gpt-4o"
+quality = "gpt-4o-mini"
+
+# ── Temperature ───────────────────────────────────────────────────────────────
+
+[temperature]
+chunk   = 0.2
+quality = 0.0
+
+# ── Chunk Stage ───────────────────────────────────────────────────────────────
+
+[chunks]
+# PDFs at or below this size (KB) use single-pass extraction.
+# PDFs above this size use two-pass (Files API upload + TOC + section loop).
+single_pass_threshold_kb = 2048
+
+# Write extracted TOC XML to output/chunk/heading/ for debugging.
+save_headings = false
+
+# Delay (seconds) between per-section LLM calls in two-pass mode.
+# No delay is applied after the last section.
+section_delay_seconds = 60
+
+# Number of pages to scan when looking for dot-leader TOC patterns (Tier 2).
+toc_max_pages = 10
+
+# Minimum text length (characters) to attempt segmentation in two-pass mode.
+min_text_length_for_segmentation = 200
+
+# Minimum length (characters) per segment; shorter segments are merged.
+min_segment_length = 100
+
+# ── Quality Stage ─────────────────────────────────────────────────────────────
+
+[quality]
+rules_procedure = "generation/rules/procedure_rules.json"
+rules_qna       = "generation/rules/qna_rules.json"
+
+# ── Related Chunks ────────────────────────────────────────────────────────────
+
+[related_chunks]
+# OpenAI embedding model used to vectorise chunk text.
+model = "text-embedding-3-large"
+
+# Cosine similarity threshold — pairs at or above this value are marked related.
+threshold = 0.70
+
+# LLM used for trigger normalisation (before embedding).
+normalize_model = "gpt-4o-mini"
+
+# ── Logging ───────────────────────────────────────────────────────────────────
+
+[logging]
+# Log level: DEBUG, INFO, WARNING, ERROR
+level   = "INFO"
+log_dir = "generation/output/log"

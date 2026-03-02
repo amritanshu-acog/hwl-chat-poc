@@ -43,3 +43,40 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 
 *.pdf
 *.csv
+
+# ── Generation pipeline — runtime output (never commit) ──────────────────────
+# Staging chunks (wiped each run)
+generation/output/chunk/procedure/*
+generation/output/chunk/qna/*
+generation/output/chunk/heading/*
+!generation/output/chunk/**/.gitkeep
+
+# Quality pass/fail directories
+generation/output/quality/pass/procedure/*
+generation/output/quality/pass/qna/*
+generation/output/quality/fail/procedure/*/
+generation/output/quality/fail/qna/*/
+generation/output/quality/reports/*
+!generation/output/quality/**/.gitkeep
+
+# Final production store
+generation/output/final/*.md
+generation/output/final/guide.yaml
+generation/output/final/backup/*/
+generation/output/final/reports/*
+!generation/output/final/.gitkeep
+!generation/output/final/backup/.gitkeep
+!generation/output/final/reports/.gitkeep
+
+# Log files
+generation/output/log/*.log
+!generation/output/log/.gitkeep
+
+# Archived inputs (do not commit processed PDFs)
+generation/input/processed/procedure/*
+generation/input/processed/qna/*
+!generation/input/processed/**/.gitkeep
+
+# Generated rules (committed once generated, so NOT excluded — remove this
+# comment and uncomment below if you want to exclude them from git too)
+# generation/rules/*.json

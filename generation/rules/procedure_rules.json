@@ -1,0 +1,159 @@
+{
+  "rules": [
+    {
+      "id": "chunk_id_required",
+      "description": "The chunk_id field must be present and not empty.",
+      "field": "front_matter.chunk_id",
+      "check": "required_non_empty",
+      "severity": "error",
+      "params": {}
+    },
+    {
+      "id": "source_required",
+      "description": "The source field must be present and not empty.",
+      "field": "front_matter.source",
+      "check": "required_non_empty",
+      "severity": "error",
+      "params": {}
+    },
+    {
+      "id": "topic_required",
+      "description": "The topic field must be present and not empty.",
+      "field": "front_matter.topic",
+      "check": "required_non_empty",
+      "severity": "error",
+      "params": {}
+    },
+    {
+      "id": "summary_single_sentence",
+      "description": "The summary field must be a single sentence.",
+      "field": "front_matter.summary",
+      "check": "single_sentence",
+      "severity": "error",
+      "params": {}
+    },
+    {
+      "id": "triggers_list_non_empty",
+      "description": "The triggers field must be a non-empty list.",
+      "field": "front_matter.triggers",
+      "check": "is_list_non_empty",
+      "severity": "error",
+      "params": {}
+    },
+    {
+      "id": "has_conditions_boolean",
+      "description": "The has_conditions field must be a boolean value (true or false).",
+      "field": "front_matter.has_conditions",
+      "check": "is_boolean",
+      "severity": "error",
+      "params": {}
+    },
+    {
+      "id": "related_chunks_list",
+      "description": "The related_chunks field must be a list (can be empty).",
+      "field": "front_matter.related_chunks",
+      "check": "is_list",
+      "severity": "error",
+      "params": {}
+    },
+    {
+      "id": "status_valid_values",
+      "description": "The status field must be one of the valid values: 'active', 'skipped', 'deprecated', or 'draft'.",
+      "field": "front_matter.status",
+      "check": "valid_values",
+      "severity": "error",
+      "params": {
+        "values": [
+          "active",
+          "skipped",
+          "deprecated",
+          "draft"
+        ]
+      }
+    },
+    {
+      "id": "context_section_present",
+      "description": "The content must include a '## Context' section.",
+      "field": "content",
+      "check": "section_present",
+      "severity": "error",
+      "params": {
+        "heading": "## Context"
+      }
+    },
+    {
+      "id": "context_section_non_empty",
+      "description": "The '## Context' section must not be empty.",
+      "field": "content",
+      "check": "section_non_empty",
+      "severity": "error",
+      "params": {
+        "heading": "## Context"
+      }
+    },
+    {
+      "id": "response_section_present",
+      "description": "The content must include a '## Response' section.",
+      "field": "content",
+      "check": "section_present",
+      "severity": "error",
+      "params": {
+        "heading": "## Response"
+      }
+    },
+    {
+      "id": "response_section_non_empty",
+      "description": "The '## Response' section must not be empty.",
+      "field": "content",
+      "check": "section_non_empty",
+      "severity": "error",
+      "params": {
+        "heading": "## Response"
+      }
+    },
+    {
+      "id": "escalation_section_present",
+      "description": "The content must include a '## Escalation' section.",
+      "field": "content",
+      "check": "section_present",
+      "severity": "error",
+      "params": {
+        "heading": "## Escalation"
+      }
+    },
+    {
+      "id": "escalation_section_non_empty",
+      "description": "The '## Escalation' section must not be empty.",
+      "field": "content",
+      "check": "section_non_empty",
+      "severity": "error",
+      "params": {
+        "heading": "## Escalation"
+      }
+    },
+    {
+      "id": "conditions_section_if_has_conditions",
+      "description": "If has_conditions is true, the content must include a '### Conditions' section.",
+      "field": "content",
+      "check": "conditional_section",
+      "severity": "error",
+      "params": {
+        "if_field": "has_conditions",
+        "if_value": true,
+        "then_heading": "### Conditions"
+      }
+    },
+    {
+      "id": "conditions_pattern_if_has_conditions",
+      "description": "If has_conditions is true, the content must include '**If [condition value]**' patterns.",
+      "field": "content",
+      "check": "conditional_pattern",
+      "severity": "error",
+      "params": {
+        "if_field": "has_conditions",
+        "if_value": true,
+        "pattern": "\\*\\*If "
+      }
+    }
+  ]
+}
