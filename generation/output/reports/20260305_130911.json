@@ -1,0 +1,53 @@
+{
+  "timestamp": "20260305_130911",
+  "sources": [
+    "HWL Agency_Update Email Preferences V2.pdf"
+  ],
+  "removed": [
+    {
+      "chunk_id": "a371ea88-e59e-4073-8d77-17d3efdac254",
+      "source": "HWL Agency_Update Email Preferences V2.pdf",
+      "topic": "Update Email Preferences - Manual Selection"
+    },
+    {
+      "chunk_id": "f08a7865-02cd-4a92-bc4e-7f0ff8e0e06d",
+      "source": "HWL Agency_Update Email Preferences V2.pdf",
+      "topic": "Update Email Preferences - Default Selection"
+    }
+  ],
+  "added": [
+    {
+      "chunk_id": "bba9d5ac-5997-4bda-9858-62a931db776a",
+      "source": "HWL Agency_Update Email Preferences V2.pdf",
+      "topic": "Update Email Preferences - Manual Selection"
+    },
+    {
+      "chunk_id": "d0783c90-9c3f-4785-b7be-264af65c8a5d",
+      "source": "HWL Agency_Update Email Preferences V2.pdf",
+      "topic": "Update Email Preferences - Default Selection"
+    }
+  ],
+  "total_final": 11,
+  "related_chunks": {
+    "model": "text-embedding-3-large",
+    "threshold": 0.7,
+    "clusters": [
+      {
+        "size": 2,
+        "chunks": [
+          {
+            "chunk_id": "bba9d5ac-5997-4bda-9858-62a931db776a",
+            "topic": "Update Email Preferences - Manual Selection",
+            "relations": 1
+          },
+          {
+            "chunk_id": "d0783c90-9c3f-4785-b7be-264af65c8a5d",
+            "topic": "Update Email Preferences - Default Selection",
+            "relations": 1
+          }
+        ]
+      }
+    ],
+    "relatedMap": {}
+  }
+}

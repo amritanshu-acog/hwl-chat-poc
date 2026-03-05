@@ -1,6 +1,7 @@
 import { google } from "@ai-sdk/google";
 import { groq } from "@ai-sdk/groq";
 import { azure } from "@ai-sdk/azure";
+import { logger } from "../core/logger.js";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -105,7 +106,7 @@ export function getModel() {
   const config = PROVIDERS[providerName];
   const modelId = process.env.AI_MODEL || config.defaultModel;
 
-  console.log(`✅ Provider: ${providerName} | Model: ${modelId}`);
+  logger.info(`Provider resolved`, { provider: providerName, model: modelId });
 
   return config.createModel(modelId);
 }

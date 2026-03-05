@@ -189,9 +189,11 @@ app.get("/api/chunks", async (c) => {
 app.post("/api/chat", async (c) => {
   const startTime = Date.now();
   // Short random ID to correlate all logs for this single request
-  const reqId = Math.random().toString(36).slice(2, 10);
+  const reqId = crypto.randomUUID().slice(0, 8);
 
   return runWithRequestId(reqId, async () => {
+    if (isShuttingDown)
+      return c.json({ error: "Server is shutting down" }, 503);
     try {
       // ── Body size guard ───────────────────────────────────────────────────
       const contentLength = Number(c.req.header("content-length") ?? 0);

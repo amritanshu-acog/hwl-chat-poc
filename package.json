@@ -35,7 +35,7 @@
     "dotenv": "^17.3.1",
     "hono": "^4.11.9",
     "node-fetch": "^3.3.2",
-    "openai": "^6.25.0",
+    "pdfjs-dist": "^5.5.207",
     "smol-toml": "^1.6.0",
     "winston": "^3.19.0",
     "zod": "^4.3.6"

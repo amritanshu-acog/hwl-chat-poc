@@ -108,6 +108,7 @@ For chunks where `has_conditions: true`:
 #### Constraints
 
 [rules or limitations that apply regardless of condition — omit section entirely if none]
+IMPORTANT: Use exactly `#### Constraints` (4 hashes). Never `###` or `##`.
 
 **If [condition value]**
 [complete pre-composed response for this branch including all steps and any handoff instructions]
@@ -129,6 +130,12 @@ Before producing your final output, verify:
 3. **Trigger diversity** — Do your triggers cover both technical jargon and plain English questions a non-expert would type?
 4. **Response actionability** — Can a customer follow the `response` field alone, without reading anything else? If not, add the missing detail.
 5. **No merged chunks** — Did you accidentally combine two separate processes? If a chunk has two distinct goals, split it.
+6. **Heading levels** — If a Constraints section exists, confirm it uses exactly
+   `#### Constraints` (four hashes, level 4) nested inside `## Response`. If a
+   Conditions section exists, confirm it uses exactly `### Conditions` (three hashes,
+   level 3) nested inside `## Response`. Never use `## Constraints` or
+   `## Conditions` as top-level sections. Wrong heading levels or wrong nesting
+   breaks downstream parsing.
 
 **Edge Cases**
 

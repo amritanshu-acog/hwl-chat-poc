@@ -5,6 +5,7 @@ import { LLMChunkOutputSchema, ChatResponseSchema } from "../core/schemas.js";
 import { ZodError } from "zod";
 import type { ChatResponse, LLMChunkOutput } from "../core/schemas.js";
 import { readFile, writeFile, mkdir } from "fs/promises";
+import { watch } from "fs";
 import { join } from "path";
 import { CONFIG } from "../core/config.js";
 import { logger } from "../core/logger.js";
@@ -88,6 +89,16 @@ export async function callLlmWithRetry<T>(fn: () => Promise<T>): Promise<T> {
 // ─── Guide loader ──────────────────────────────────────────────────────────────
 
 let _guideCache: string | null = null;
+
+// Invalidate cache the moment guide.yaml is written by the pipeline.
+try {
+  watch(CONFIG.paths.guide, () => {
+    _guideCache = null;
+    logger.info("guide.yaml changed on disk — cache cleared");
+  });
+} catch {
+  logger.warn("Could not watch guide.yaml — cache will persist until restart");
+}
 
 export async function loadGuide(): Promise<string> {
   if (_guideCache) return _guideCache;
@@ -488,14 +499,18 @@ export async function answerTroubleshootingQuestion(
       }
     }
   }
-
+  const derivedMode = guideEntries
+    .filter((e) => chunkIds.includes(e.chunk_id))
+    .some((e) => e.has_conditions)
+    ? "clarify"
+    : "answer";
   const systemPrompt = await loadPrompt("chat");
   const contextBlock =
     chunkContents.length > 0
       ? `\n\nRELEVANT CHUNK DOCUMENTATION:\n${chunkContents.join("\n\n")}`
       : "\n\nRELEVANT CHUNK DOCUMENTATION:\nNo matching chunks found for this query.";
-  const modeBlock = `\n\nCURRENT MODE: ${mode.toUpperCase()}\n${
-    mode === "clarify"
+  const modeBlock = `\n\nCURRENT MODE: ${derivedMode.toUpperCase()}\n${
+    derivedMode === "clarify"
       ? "The user needs clarification. Prefer choices or alert responses."
       : "Answer mode. Go directly to steps if documentation supports it."
   }`;
@@ -537,7 +552,7 @@ export async function answerTroubleshootingQuestion(
   logger.info("Generation complete", {
     durationMs: Date.now() - t0,
     chunksUsed: chunkContents.length,
-    mode,
+    derivedMode,
   });
   logger.debug("Raw chat LLM output", { preview: genText.substring(0, 1000) });
 

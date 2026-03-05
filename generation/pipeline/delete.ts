@@ -134,9 +134,10 @@ async function backupFinal(
   await mkdir(dest, { recursive: true });
   await cp(finalDir, dest, {
     recursive: true,
-    filter: (src) =>
-      (!src.includes("/backup/") && !src.includes("/reports/")) ||
-      src === finalDir,
+    filter: (src) => {
+      const relative = src.replace(finalDir, "");
+      return !relative.startsWith("/reports");
+    },
   });
 }
 
@@ -303,9 +304,7 @@ export async function runDelete(sourceFilename: string): Promise<DeleteResult> {
 if (import.meta.main) {
   const source = process.argv[2];
   if (!source) {
-    console.error(
-      "Usage: bun generation/pipeline/delete.ts <pdf_filename>",
-    );
+    console.error("Usage: bun generation/pipeline/delete.ts <pdf_filename>");
     console.error(
       'Example: bun generation/pipeline/delete.ts "My Document.pdf"',
     );

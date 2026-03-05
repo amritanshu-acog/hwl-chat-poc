@@ -50,6 +50,7 @@ generation/output/chunk/procedure/*
 generation/output/chunk/qna/*
 generation/output/chunk/heading/*
 !generation/output/chunk/**/.gitkeep
+generation/output/backup/*
 
 # Quality pass/fail directories
 generation/output/quality/pass/procedure/*

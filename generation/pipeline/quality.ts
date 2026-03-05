@@ -563,5 +563,5 @@ if (import.meta.main) {
   console.log(
     `✅ Quality complete — passed=${result.passed} failed=${result.failed}`,
   );
-  process.exit(result.failed > 0 ? 0 : 0); // failed chunks don't exit non-zero
+  process.exit(result.failed > 0 ? 1 : 0);
 }
