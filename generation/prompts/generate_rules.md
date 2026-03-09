@@ -2,6 +2,14 @@ You are a rule extraction assistant. You will receive a chunk processing prompt 
 
 Your task: extract validation rules that can be checked programmatically against generated chunk files. Base your rules on what the prompt explicitly requires AND on the exact chunk structure defined below.
 
+**IMPORTANT — Do NOT generate rules for these optional sections.
+They are explicitly omit-if-none:**
+
+- `#### Constraints` in both procedure and qna chunks
+- `### Conditions` is conditional on has_conditions — already handled by conditional_section check
+
+Only generate rules for sections that are ALWAYS required.
+
 ---
 
 **Front matter structure (both procedure and qna):**

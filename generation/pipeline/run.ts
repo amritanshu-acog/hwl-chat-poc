@@ -28,7 +28,7 @@ interface DocTypeResult {
   doc_type: DocType;
   chunk: {
     success: boolean;
-    processed: number;
+    processed: string[]; // filenames successfully chunked
     skipped: number;
     chunks_written: number;
   };
@@ -62,18 +62,22 @@ async function runForDocType(
     const r = await runChunk(doc_type);
     chunkResult = {
       success: true,
-      processed: r.processed.length,
+      processed: r.processed,
       skipped: r.skipped.length,
       chunks_written: r.chunks_written,
     };
-    log.info(`[${doc_type}] Chunk stage complete`, chunkResult);
+    log.info(`[${doc_type}] Chunk stage complete`, {
+      processed: r.processed.length,
+      skipped: r.skipped.length,
+      chunks_written: r.chunks_written,
+    });
   } catch (err) {
     // Fundamental failure (missing prompt, unreadable input dir)
     const error = err instanceof Error ? err.message : String(err);
     log.error(`[${doc_type}] Chunk stage fundamental failure`, { error });
     chunkResult = {
       success: false,
-      processed: 0,
+      processed: [],
       skipped: 0,
       chunks_written: 0,
     };
@@ -116,13 +120,13 @@ async function run(docTypes: DocType[]): Promise<RunResult> {
   const results: Record<DocType, DocTypeResult> = {
     procedure: {
       doc_type: "procedure",
-      chunk: { success: false, processed: 0, skipped: 0, chunks_written: 0 },
+      chunk: { success: false, processed: [], skipped: 0, chunks_written: 0 },
       quality: null,
       archive: null,
     },
     qna: {
       doc_type: "qna",
-      chunk: { success: false, processed: 0, skipped: 0, chunks_written: 0 },
+      chunk: { success: false, processed: [], skipped: 0, chunks_written: 0 },
       quality: null,
       archive: null,
     },
@@ -167,7 +171,11 @@ async function run(docTypes: DocType[]): Promise<RunResult> {
 
     log.info(`[${doc_type}] Starting archive stage`);
     try {
-      const r = await runArchive(doc_type, log);
+      const r = await runArchive(
+        doc_type,
+        results[doc_type].chunk.processed,
+        log,
+      );
       results[doc_type].archive = {
         success: r.failed.length === 0,
         archived: r.archived.length,
@@ -237,7 +245,7 @@ function printSummary(
     console.log(`── ${doc_type.toUpperCase()} ──`);
     const c = r.chunk;
     console.log(
-      `  Chunk:   ${c.success ? "✅" : "❌"}  processed=${c.processed} skipped=${c.skipped} written=${c.chunks_written}`,
+      `  Chunk:   ${c.success ? "✅" : "❌"}  processed=${c.processed.length} skipped=${c.skipped} written=${c.chunks_written}`,
     );
     if (r.quality) {
       const q = r.quality;

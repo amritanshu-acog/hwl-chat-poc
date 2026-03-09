@@ -2,7 +2,12 @@ import type { GuideEntry } from "../core/schemas.js";
 
 /**
  * Parse raw guide.yaml text into structured GuideEntry objects.
- * Used by extract.ts (to update guide) and llm-client.ts (to load chunks).
+ *
+ * GAP FIX #5: summary was parsed with a YAML block-scalar regex (summary: >\n  text)
+ * but the generation pipeline writes plain quoted strings: summary: "text here"
+ *
+ * GAP FIX #6: related_chunks was parsed with a multiline block-sequence regex
+ * but the generation pipeline writes inline lists: related_chunks: ["id1","id2"]
  */
 export function parseGuideEntries(raw: string): GuideEntry[] {
   const entries: GuideEntry[] = [];
@@ -14,15 +19,28 @@ export function parseGuideEntries(raw: string): GuideEntry[] {
     try {
       const chunk_id = block.match(/^\s*([^\n]+)/)?.[1]?.trim() ?? "";
       const source =
-        block.match(/\n\s+source:\s*(.+)/)?.[1]?.trim() ?? "unknown";
-      const topic = block.match(/\n\s+topic:\s*(.+)/)?.[1]?.trim() ?? "";
-      const summary =
-        block.match(/summary:\s*>\s*\n\s+(.+)/)?.[1]?.trim() ?? "";
+        block.match(/\n\s+source:\s*"?([^"\n]+)"?/)?.[1]?.trim() ?? "unknown";
+      const topic =
+        block.match(/\n\s+topic:\s*"?([^"\n]+)"?/)?.[1]?.trim() ?? "";
+
+      // GAP FIX #5 — handle both quoted ("text") and block-scalar (> + indent) formats.
+      const summaryQuoted = block
+        .match(/\n\s+summary:\s*"([^"]+)"/)?.[1]
+        ?.trim();
+      const summaryBlock = block
+        .match(/\n\s+summary:\s*>\s*\n\s+(.+)/)?.[1]
+        ?.trim();
+      const summaryPlain = block
+        .match(/\n\s+summary:\s*([^"\n][^\n]*)/)?.[1]
+        ?.trim();
+      const summary = summaryQuoted ?? summaryBlock ?? summaryPlain ?? "";
+
       const has_conditions =
         block.match(/\n\s+has_conditions:\s*(true|false)/)?.[1] === "true";
       const status = (block.match(/\n\s+status:\s*(\w+)/)?.[1]?.trim() ??
         "active") as "active" | "review" | "deprecated";
 
+      // Triggers — multiline block sequence only (generation always writes this format)
       const triggersSection = block.match(
         /\n\s+triggers:\s*\n((?:\s+- .+\n?)*)/,
       );
@@ -32,14 +50,29 @@ export function parseGuideEntries(raw: string): GuideEntry[] {
           )
         : [];
 
-      const relatedSection = block.match(
-        /\n\s+related_chunks:\s*\n((?:\s+- .+\n?)*)/,
-      );
-      const related_chunks = relatedSection?.[1]
-        ? [...relatedSection[1].matchAll(/- (.+?)\s*$/gm)].map((m) =>
-            m[1]!.trim().replace(/^chunk_id:/i, ""),
-          )
-        : [];
+      // GAP FIX #6 — handle both inline list format ["id1","id2"] and multiline format.
+      let related_chunks: string[] = [];
+
+      const relatedInline = block.match(/\n\s+related_chunks:\s*\[([^\]]*)\]/);
+      if (relatedInline) {
+        const inner = relatedInline[1]?.trim() ?? "";
+        related_chunks = inner
+          ? inner
+              .split(",")
+              .map((s) => s.trim().replace(/^["']|["']$/g, ""))
+              .filter(Boolean)
+          : [];
+      } else {
+        // Multiline block-sequence fallback.
+        const relatedSection = block.match(
+          /\n\s+related_chunks:\s*\n((?:\s+- .+\n?)*)/,
+        );
+        related_chunks = relatedSection?.[1]
+          ? [...relatedSection[1].matchAll(/- (.+?)\s*$/gm)].map((m) =>
+              m[1]!.trim().replace(/^chunk_id:/i, ""),
+            )
+          : [];
+      }
 
       if (chunk_id && topic) {
         entries.push({

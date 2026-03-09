@@ -1,0 +1,258 @@
+# Retrieval Pipeline — Setup & Usage Guide
+
+## What Was Built
+
+A fully structured retrieval pipeline replacing the old POC single-function approach.
+
+```
+server/
+├── pipeline/          ← The core: triage → respond → format
+├── session/           ← JSONL-persisted sessions per user
+├── resources/         ← TTL guide cache, static prompt/fallback cache
+├── api/server.ts      ← HTTP API (JWT-protected)
+├── cli/chat.ts        ← Dev/test interactive CLI
+├── core/config.ts     ← All configuration
+├── core/schemas.ts    ← All Zod schemas + types
+└── prompts/           ← triage.md, respond.md, format.md, format-mdx.md, title.md
+```
+
+---
+
+## 1. What to Add to [.env](file:///Users/amritanshu/Desktop/AI%20Chat%20bot/troubleshooting-poc/.env)
+
+Your existing [.env](file:///Users/amritanshu/Desktop/AI%20Chat%20bot/troubleshooting-poc/.env) already has the LLM provider keys. Add these **new entries**:
+
+```env
+# ── Sessions ────────────────────────────────────────────────────────────────────
+# Where JSONL session files are stored (created automatically)
+SESSIONS_DIR=./data/sessions
+
+# Max user turns per session before quota_exceeded is returned
+MAX_TURNS_PER_SESSION=20
+
+# ── Retrieval ────────────────────────────────────────────────────────────────────
+# Max clarifying questions per topic window (default 2)
+CLARIFICATION_LIMIT=2
+
+# guide.yaml cache TTL in seconds (default 300 = 5 min, 0 = always read from disk)
+GUIDE_TTL_SECONDS=300
+
+# ── Format prompt ────────────────────────────────────────────────────────────────
+# "format" = plain markdown (default)
+# "format-mdx" = MDX component markup for React UI
+PROMPT_FORMAT=format
+
+# ── Auth (HTTP API only) ─────────────────────────────────────────────────────────
+# JWT algorithm: HS256 or RS256
+JWT_ALGORITHM=HS256
+# JWT claim used as user_id for session storage
+JWT_USER_ID_CLAIM=sub
+# The actual secret — keep this private
+JWT_SECRET=your-secret-here
+```
+
+> **Note:** `JWT_SECRET` is read by your JWT middleware at verify time. The pipeline
+> reads `JWT_ALGORITHM` and `JWT_USER_ID_CLAIM` from config. You need to wire
+> your own JWT verification using `JWT_SECRET` if you want full token signature checking
+> (the current [extractUserId](file:///Users/amritanshu/Desktop/AI%20Chat%20bot/troubleshooting-poc/server/api/server.ts#29-53) decodes the payload for the claim but does not verify
+> the signature — add `jose` or `jsonwebtoken` for production).
+
+---
+
+## 2. What to Add to [package.json](file:///Users/amritanshu/Desktop/AI%20Chat%20bot/troubleshooting-poc/package.json) Scripts
+
+The existing scripts already cover `chat` and `server`. Add these for convenience:
+
+```json
+"scripts": {
+  "chat": "bun server/cli/chat.ts",
+  "server": "bun run server/api/server.ts",
+
+  "chat:user": "bun server/cli/chat.ts --user-id",
+  "chat:resume": "bun server/cli/chat.ts --user-id $USER_ID --session-id $SESSION_ID",
+  "chat:list": "bun server/cli/chat.ts --user-id $USER_ID --list",
+  "chat:show": "bun server/cli/chat.ts --user-id $USER_ID --show $SESSION_ID"
+}
+```
+
+---
+
+## 3. How to Run
+
+### CLI (dev/test — no auth required)
+
+```bash
+# New session as default user (cli-user)
+bun run chat
+
+# New session as a specific user
+bun server/cli/chat.ts --user-id alice
+
+# Resume an existing session
+bun server/cli/chat.ts --user-id alice --session-id <uuid>
+
+# List all sessions for a user
+bun server/cli/chat.ts --user-id alice --list
+
+# Print full conversation history for a session
+bun server/cli/chat.ts --user-id alice --show <uuid>
+```
+
+### HTTP Server
+
+```bash
+bun run server
+```
+
+Server starts on **http://localhost:3000**
+
+---
+
+## 4. HTTP API Endpoints
+
+### `POST /answer`
+Submit a user message and receive an answer.
+
+**Headers:**
+```
+Authorization: Bearer <jwt>
+Content-Type: application/json
+```
+
+**Request body:**
+```json
+{
+  "message": "How do I submit a credentialing document?",
+  "session_id": "uuid-optional"
+}
+```
+Omit `session_id` to start a new session. Include it to resume.
+
+**Response `200`:**
+```json
+{
+  "session_id": "uuid",
+  "action": "respond",
+  "response": "formatted markdown response",
+  "response_type": "answer",
+  "citations": [
+    { "chunk_id": "uuid", "source": "procedure.pdf" }
+  ]
+}
+```
+
+**`response_type` values:**
+
+| Value | Meaning |
+|-------|---------|
+| `answer` | Direct single-path answer |
+| `options` | Multiple paths — user must choose |
+| `mixed` | Narrative + conditional branches |
+| `clarify` | Question too vague — bot asks for clarification |
+| `notfound` | No match found — fallback served |
+| `quota_exceeded` | Session turn limit reached → HTTP 429 |
+
+---
+
+### `GET /sessions`
+List all sessions for the authenticated user.
+
+**Headers:** `Authorization: Bearer <jwt>`
+
+**Response `200`:**
+```json
+[
+  {
+    "session_id": "uuid",
+    "title": "How to submit credentialing docs",
+    "filename": "20260303_083313_uuid.jsonl",
+    "updated_at": "2026-03-03T08:45:00Z",
+    "turn_count": 4
+  }
+]
+```
+
+---
+
+### `GET /sessions/:sessionId`
+Get full turn history for a session.
+
+**Headers:** `Authorization: Bearer <jwt>`
+
+**Response `200`:**
+```json
+{
+  "session_id": "uuid",
+  "user_id": "alice",
+  "title": "How to submit credentialing docs",
+  "created_at": "2026-03-03T08:33:13Z",
+  "turns": [
+    { "type": "turn", "role": "user", "window": 0, "content": "...", "ts": "..." },
+    { "type": "turn", "role": "assistant", "window": 0, "content": "...",
+      "citations": [{ "chunk_id": "...", "source": "procedure.pdf" }],
+      "duration_ms": 1840, "ts": "..." }
+  ]
+}
+```
+
+**Response `404`:** Session not found
+
+---
+
+### `GET /health`
+No auth required.
+
+```json
+{ "status": "ok", "breaker": "CLOSED" }
+```
+
+---
+
+## 5. HTTP Status Codes
+
+| Code | When |
+|------|------|
+| `200` | Success |
+| `400` | Missing `message` field or bad JSON |
+| `401` | Missing/malformed/expired JWT |
+| `404` | Session not found |
+| `413` | Request body too large (> 64 KB) |
+| `429` | Session turn quota exceeded |
+| `500` | Pipeline error |
+| `503` | Server shutting down |
+| `504` | LLM response timed out (120s default) |
+
+---
+
+## 6. Prerequisites
+
+Before the retrieval pipeline can answer anything, the **generation pipeline must have run**:
+
+```bash
+# Process a PDF and build the knowledge base
+bun run gen:run
+
+# Compile guide.yaml from all processed chunks
+bun run gen:compile
+```
+
+This produces:
+```
+generation/output/final/
+├── guide.yaml          ← triage index
+├── default.md          ← fallback response
+└── <uuid>.md           ← individual chunk files
+```
+
+The retrieval pipeline reads from this directory. It never writes to it.
+
+---
+
+## 7. Swapping to MDX Format (React UI)
+
+Set in [.env](file:///Users/amritanshu/Desktop/AI%20Chat%20bot/troubleshooting-poc/.env):
+```env
+PROMPT_FORMAT=format-mdx
+```
+
+The formatter will now emit `<Steps>`, `<Callout>`, `<Tabs>` MDX components instead of plain markdown. No code changes needed.

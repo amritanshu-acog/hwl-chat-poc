@@ -1,0 +1,26 @@
+# Golden Dataset — Coverage Tests
+# GAP FIX #11
+#
+# Run with: bun server/tests/golden/run.ts
+#
+# Each entry tests that a real question routes to respond and cites the
+# correct source document. Add one entry per major topic in your KB.
+#
+# Fields:
+#   question        — the user message to send
+#   expected_source — filename that must appear in citations (e.g. "procedure.pdf")
+#   tags            — used by the runner to filter (smoke = minimal fast set)
+#   notes           — optional context for the reviewer
+#
+# Pass criteria: action=respond AND at least one citation has source == expected_source.
+
+tests:
+  - question: "How do I reset my password?"
+    expected_source: "REPLACE_WITH_YOUR_SOURCE.pdf"
+    tags: [smoke]
+    notes: "Edit this entry — replace question and expected_source with a real KB entry"
+
+  - question: "ADD MORE QUESTIONS HERE"
+    expected_source: "REPLACE_WITH_YOUR_SOURCE.pdf"
+    tags: [coverage]
+    notes: "One entry per major topic in your knowledge base"

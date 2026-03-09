@@ -3,13 +3,14 @@
  *
  * Notification hook (stub).
  *
- * Called by the quality stage after each run. Currently a no-op that logs
- * what would be sent. Replace the body of notify() to wire in a real channel
- * (email, Slack, webhook) without changing any call sites.
+ * Called by the quality stage and guide quality stage after each run.
+ * Currently a no-op that logs what would be sent. Replace the body of
+ * notify() to wire in a real channel (email, Slack, webhook) without
+ * changing any call sites.
  *
- * Design reference: §15 Developer Notes — "Design this as a stub so that
+ * Design reference: §14 Developer Notes — "Design this as a stub so that
  * a channel-specific implementation can be wired in later without changing
- * the quality stage logic."
+ * the stage logic."
  */
 
 import type { StageLogger } from "../core/logger.js";
@@ -25,10 +26,21 @@ export interface QualityCompletePayload {
   failed: number;
 }
 
-export type NotifyEvent = {
-  event: "quality_complete";
-  payload: QualityCompletePayload;
-};
+export interface GuideQualityCompletePayload {
+  timestamp: string;
+  total_chunks: number;
+  summary: {
+    duplicate_trigger_groups: number;
+    orphan_refs: number;
+    asymmetric_refs: number;
+    missing_field_chunks: number;
+    empty_trigger_chunks: number;
+  };
+}
+
+export type NotifyEvent =
+  | { event: "quality_complete"; payload: QualityCompletePayload }
+  | { event: "guide_quality_complete"; payload: GuideQualityCompletePayload };
 
 // ─── Stub implementation ──────────────────────────────────────────────────────
 
@@ -52,9 +64,6 @@ export async function notify(ev: NotifyEvent, log: StageLogger): Promise<void> {
   // await fetch(process.env.SLACK_WEBHOOK_URL!, {
   //   method: "POST",
   //   headers: { "Content-Type": "application/json" },
-  //   body: JSON.stringify({
-  //     text: `Quality complete for ${ev.payload.doc_type}: ` +
-  //           `${ev.payload.passed}/${ev.payload.total_chunks} passed`,
-  //   }),
+  //   body: JSON.stringify({ text: `Event: ${ev.event}` }),
   // });
 }

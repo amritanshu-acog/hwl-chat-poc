@@ -1,5 +1,5 @@
 /**
- * generation/s../core/config.ts
+ * generation/core/config.ts
  *
  * Reads generation/config.toml at startup and exports a typed CONFIG object.
  * All pipeline code imports from here — no raw TOML parsing elsewhere.
@@ -43,9 +43,14 @@ export interface PipelineConfig {
   temperature: {
     chunk: number;
     quality: number;
+    normalize: number;
   };
   chunks: {
     single_pass_threshold_kb: number;
+    single_pass_formats: string[];
+    two_pass_formats: string[];
+    use_files_api: boolean;
+    skip_headings: string[];
     save_headings: boolean;
     section_delay_seconds: number;
     toc_max_pages: number;

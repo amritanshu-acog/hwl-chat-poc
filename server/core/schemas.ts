@@ -1,8 +1,7 @@
 import { z } from "zod";
 
-// ─── Chunk Front Matter Schema ─────────────────────────────────────────────────
-// Mirrors guide.yaml exactly — same fields, same schema, no duplication.
-// One chunk = one concept/question.
+// ─── Chunk & Guide Schemas ─────────────────────────────────────────────────────
+// Shared between the generation pipeline (read-only here) and retrieval runtime.
 
 export const ChunkFrontMatterSchema = z.object({
   chunk_id: z
@@ -18,57 +17,7 @@ export const ChunkFrontMatterSchema = z.object({
   status: z.enum(["active", "review", "deprecated"]).default("active"),
 });
 
-// ─── Full Chunk Schema (front matter + markdown body sections) ─────────────────
-
-export const ChunkSectionSchema = z.object({
-  // Always present
-  context: z.string().min(1),
-
-  // Only present when has_conditions: true
-  conditions: z.string().optional(),
-
-  // Only present when hard system limits exist
-  constraints: z.string().optional(),
-
-  // Always present for active customer-facing chunks
-  response: z.string().min(1),
-});
-
-export const ChunkSchema = z.object({
-  front_matter: ChunkFrontMatterSchema,
-  sections: ChunkSectionSchema,
-});
-
-// ─── LLM Extraction Output Schema ─────────────────────────────────────────────
-// What we ask the LLM to return. Flat for easy JSON extraction, then we
-// assemble the final .md and front matter from it.
-
-export const LLMChunkOutputSchema = z.object({
-  chunk_id: z
-    .string()
-    .min(1)
-    .regex(/^[a-z0-9-]+$/, "chunk_id must be lowercase-hyphenated"),
-  topic: z.string().min(1),
-  summary: z.string().min(1),
-  triggers: z.array(z.string()).min(1),
-  has_conditions: z.boolean(),
-  related_chunks: z.array(z.string()).default([]),
-  status: z.enum(["active", "review", "deprecated"]).default("active"),
-
-  // Markdown body sections
-  context: z.string().min(1),
-  conditions: z.string().optional(), // required when has_conditions: true
-  constraints: z.string().optional(),
-  response: z.string().min(1),
-});
-
-export type LLMChunkOutput = z.infer<typeof LLMChunkOutputSchema>;
 export type ChunkFrontMatter = z.infer<typeof ChunkFrontMatterSchema>;
-export type ChunkSection = z.infer<typeof ChunkSectionSchema>;
-export type Chunk = z.infer<typeof ChunkSchema>;
-
-// ─── Guide YAML Entry ──────────────────────────────────────────────────────────
-// Derived from chunk front matter after aggregation pass.
 
 export const GuideEntrySchema = z.object({
   chunk_id: z.string(),
@@ -83,94 +32,77 @@ export const GuideEntrySchema = z.object({
 
 export type GuideEntry = z.infer<typeof GuideEntrySchema>;
 
-// ─── Chat Response Envelope ────────────────────────────────────────────────────
-// What the LLM returns at runtime. Frontend reads `type` and renders
-// the matching MDX component.
+// ─── Triage Output ─────────────────────────────────────────────────────────────
+// Exactly what the triage LLM returns — one of four actions.
 
-export const StepsResponseSchema = z.object({
-  type: z.literal("steps"),
-  data: z.object({
-    title: z.string(),
-    intro: z.string().optional(),
-    steps: z.array(
-      z.object({
-        title: z.string(),
-        body: z.string(),
-      }),
-    ),
-    followUp: z.string().optional(),
-  }),
-});
-
-export const ChoicesResponseSchema = z.object({
-  type: z.literal("choices"),
-  data: z.object({
+export const TriageOutputSchema = z.discriminatedUnion("action", [
+  z.object({
+    action: z.literal("clarify"),
     question: z.string(),
-    options: z.array(
-      z.object({
-        label: z.string(),
-        description: z.string().optional(),
-      }),
-    ),
   }),
-});
-
-export const AlertResponseSchema = z.object({
-  type: z.literal("alert"),
-  data: z.object({
-    severity: z.enum(["info", "warning", "danger"]),
+  z.object({
+    action: z.literal("respond"),
+    chunk_ids: z.array(z.string()),
     title: z.string(),
-    body: z.string(),
   }),
-});
-
-export const ChecklistResponseSchema = z.object({
-  type: z.literal("checklist"),
-  data: z.object({
+  z.object({
+    action: z.literal("not_found"),
     title: z.string(),
-    items: z.array(z.string()),
   }),
-});
-
-export const EscalationResponseSchema = z.object({
-  type: z.literal("escalation"),
-  data: z.object({
-    reason: z.string(),
-    summary: z.string(),
-    ctaLabel: z.string().default("Create Support Ticket"),
+  z.object({
+    action: z.literal("new_topic"),
   }),
-});
-
-export const SummaryResponseSchema = z.object({
-  type: z.literal("summary"),
-  data: z.object({
-    title: z.string(),
-    body: z.string(),
-  }),
-});
-
-export const TextResponseSchema = z.object({
-  type: z.literal("text"),
-  data: z.object({
-    body: z.string(),
-  }),
-});
-
-export const ChatResponseSchema = z.discriminatedUnion("type", [
-  StepsResponseSchema,
-  ChoicesResponseSchema,
-  AlertResponseSchema,
-  ChecklistResponseSchema,
-  EscalationResponseSchema,
-  SummaryResponseSchema,
-  TextResponseSchema,
 ]);
 
-export type ChatResponse = z.infer<typeof ChatResponseSchema>;
-export type StepsResponse = z.infer<typeof StepsResponseSchema>;
-export type ChoicesResponse = z.infer<typeof ChoicesResponseSchema>;
-export type AlertResponse = z.infer<typeof AlertResponseSchema>;
-export type ChecklistResponse = z.infer<typeof ChecklistResponseSchema>;
-export type EscalationResponse = z.infer<typeof EscalationResponseSchema>;
-export type SummaryResponse = z.infer<typeof SummaryResponseSchema>;
-export type TextResponse = z.infer<typeof TextResponseSchema>;
+export type TriageOutput = z.infer<typeof TriageOutputSchema>;
+export type TriageAction = TriageOutput["action"];
+
+// ─── Respond Output ────────────────────────────────────────────────────────────
+// What the respond LLM returns — typed answer with cited chunk IDs.
+
+export const RespondOutputSchema = z.object({
+  type: z.enum(["answer", "options", "mixed", "notfound"]),
+  response: z.string(),
+  cited_chunk_ids: z.array(z.string()),
+});
+
+export type RespondOutput = z.infer<typeof RespondOutputSchema>;
+export type ResponseType = RespondOutput["type"];
+
+// ─── Citation ─────────────────────────────────────────────────────────────────
+// Stored in session turn records and returned to the caller.
+
+export const CitationSchema = z.object({
+  chunk_id: z.string(),
+  source: z.string(),
+});
+
+export type Citation = z.infer<typeof CitationSchema>;
+
+// ─── Turn Result ───────────────────────────────────────────────────────────────
+// The full response the pipeline returns — used by both the HTTP API and CLI.
+
+export const TurnResultSchema = z.object({
+  session_id: z.string(),
+
+  // Triage action that produced this turn.
+  action: z.enum(["clarify", "respond", "not_found", "quota_exceeded"]),
+
+  // Formatted response text (from formatter, or fallback, or clarifying question).
+  response: z.string(),
+
+  // Finer-grained classification of what was returned.
+  response_type: z.enum([
+    "clarify", // clarifying question returned
+    "answer", // direct single-path answer
+    "options", // multiple conditional paths for user to choose
+    "mixed", // narrative + conditional branches
+    "notfound", // chunks retrieved or not — content did not answer
+    "quota_exceeded", // session turn limit reached
+  ]),
+
+  // Non-empty only on respond → answer/options/mixed turns.
+  citations: z.array(CitationSchema),
+});
+
+export type TurnResult = z.infer<typeof TurnResultSchema>;

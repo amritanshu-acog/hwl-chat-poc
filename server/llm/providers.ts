@@ -96,17 +96,23 @@ function resolveProviderName(): ProviderName {
 /**
  * Get the active model instance, resolved from environment configuration.
  *
- * You can override the model ID via the `AI_MODEL` env var:
- *   `AI_MODEL=gpt-4o bun run chat`
+ * GAP FIX #1/#10: Accepts an optional callModelId so each pipeline stage
+ * can specify its own configured model (CONFIG.models.triage, etc.).
  *
+ * Model ID resolution priority:
+ *   1. callModelId  — set by the call site from CONFIG.models.*
+ *   2. AI_MODEL env — global override (useful for quick testing)
+ *   3. Provider default model
+ *
+ * @param callModelId  Optional model ID from the call-site config.
  * @returns An AI SDK–compatible model instance
  */
-export function getModel() {
+export function getModel(callModelId?: string) {
   const providerName = resolveProviderName();
   const config = PROVIDERS[providerName];
-  const modelId = process.env.AI_MODEL || config.defaultModel;
+  const modelId = callModelId ?? process.env.AI_MODEL ?? config.defaultModel;
 
-  logger.info(`Provider resolved`, { provider: providerName, model: modelId });
+  logger.debug("Provider resolved", { provider: providerName, model: modelId });
 
   return config.createModel(modelId);
 }

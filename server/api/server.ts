@@ -1,359 +1,285 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
-import { readFile, appendFile, mkdir } from "fs/promises";
-import { join, basename } from "path";
-import { answerTroubleshootingQuestion } from "../llm/client.js";
+import { jwtVerify, createRemoteJWKSet } from "jose";
+import { runPipeline } from "../pipeline/pipeline.js";
+import { Session } from "../session/session.js";
+import { preload } from "../resources/resources.js";
 import { CONFIG } from "../core/config.js";
-import { runWithRequestId } from "../core/logger.js";
+import { runWithRequestId, logger } from "../core/logger.js";
+import { getBreakerState } from "../llm/client.js";
 
-// ─── Types ──────────────────────────────────────────────────────────────────────
-
-type Message = { role: "user" | "assistant"; content: string };
-type Session = { messages: Message[]; lastAccess: number };
-type Mode = "clarify" | "answer";
-
-// ─── App & state ────────────────────────────────────────────────────────────────
+// ─── App ──────────────────────────────────────────────────────────────────────
 
 const app = new Hono();
-const sessions = new Map<string, Session>();
 
-const SESSION_MAX_MESSAGES = 20;
-const SESSION_TTL_MS = 30 * 60 * 1000; // 30 minutes
-
-// ─── Log setup ─────────────────────────────────────────────────────────────────
-
-const LOG_DIR = join(process.cwd(), "generation", "output", "log");
-const LOG_PATH = join(LOG_DIR, "requests.ndjson");
-await mkdir(LOG_DIR, { recursive: true });
-
-interface LogEntry {
-  reqId: string;
-  timestamp: string;
-  sessionId: string;
-  mode: Mode;
-  question: string;
-  responseEnvelope: unknown;
-  durationMs: number;
-}
-
-/**
- * Fire-and-forget log write — never delays the HTTP response.
- * Errors are swallowed (logged to stderr); log failures must not affect clients.
- */
-function writeLog(entry: LogEntry): void {
-  appendFile(LOG_PATH, JSON.stringify(entry) + "\n", "utf-8").catch((err) => {
-    console.error("[logger] Failed to write log entry:", err);
-  });
-}
-
-// ─── CORS ───────────────────────────────────────────────────────────────────────
-// Origin is driven by CONFIG.server.corsOrigin (set CORS_ORIGIN env var in prod)
+// ─── CORS ─────────────────────────────────────────────────────────────────────
 
 app.use(
-  "/api/*",
+  "/*",
   cors({
     origin: CONFIG.server.corsOrigin,
     allowMethods: ["GET", "POST", "OPTIONS"],
-    allowHeaders: ["Content-Type"],
+    allowHeaders: ["Content-Type", "Authorization"],
   }),
 );
 
-// ─── Rate limiter (sliding-window, per-session) ────────────────────────────────
+// ─── JWT Auth ─────────────────────────────────────────────────────────────────
 //
-// Tracks request timestamps for each session in a rolling window.
-// No external dependency — purely in-memory, sufficient for single-instance POC.
-// In multi-instance production: swap for Redis + a sliding-log implementation.
+// GAP FIX #3: JWT signature is now cryptographically verified using `jose`.
+// The previous implementation only base64-decoded the payload — anyone could
+// forge a token. Now:
+//   HS256 — verified against JWT_SECRET env var (shared secret)
+//   RS256 — verified against JWKS_URL or JWT_PUBLIC_KEY env var (public key)
+//
+// Returns null on any failure: missing header, malformed token, bad signature,
+// expired token, missing user_id claim.
 
-const rateLimitStore = new Map<string, number[]>();
+let _jwks: ReturnType<typeof createRemoteJWKSet> | null = null;
 
-function isRateLimited(sessionId: string): boolean {
-  const now = Date.now();
-  const windowMs = CONFIG.server.rateLimitWindowMs;
-  const maxRequests = CONFIG.server.rateLimitMaxRequests;
-
-  const timestamps = (rateLimitStore.get(sessionId) ?? []).filter(
-    (t) => now - t < windowMs,
-  );
-
-  if (timestamps.length >= maxRequests) {
-    rateLimitStore.set(sessionId, timestamps);
-    return true;
+function getJwks(): ReturnType<typeof createRemoteJWKSet> {
+  if (!_jwks) {
+    const url = process.env.JWKS_URL;
+    if (!url) {
+      throw new Error("JWKS_URL env var required for RS256 verification");
+    }
+    _jwks = createRemoteJWKSet(new URL(url));
   }
-
-  timestamps.push(now);
-  rateLimitStore.set(sessionId, timestamps);
-  return false;
+  return _jwks;
 }
 
-// ─── Startup ──────────────────────────────────────────────────────────────────
+/**
+ * Verify a Bearer JWT and extract the configured user_id claim.
+ * Returns null on any failure — the caller should respond 401.
+ */
+async function authenticateRequest(
+  authHeader: string | undefined,
+): Promise<string | null> {
+  if (!authHeader?.startsWith("Bearer ")) return null;
+  const token = authHeader.slice(7).trim();
+  if (!token) return null;
 
-const GUIDE_PATH = join(
-  process.cwd(),
-  "generation",
-  "output",
-  "final",
-  "guide.yaml",
-);
-let chunkCount = 0;
-
-try {
-  const guide = await readFile(GUIDE_PATH, "utf-8");
-  const guideBlocks = guide.split(/^\s*- chunk_id:/m).filter((b) => b.trim());
-  chunkCount = guideBlocks.filter((b) => b.match(/status:\s*active/)).length;
-  console.log(`\n🚀 Server ready — ${chunkCount} chunks in guide.yaml\n`);
-} catch {
-  console.warn("⚠️  guide.yaml not found. Run bun run extract first.");
-}
-console.log("🌐 Listening on http://localhost:3000");
-console.log(`📝 Logging to ${LOG_PATH}\n`);
-console.log(`🔒 CORS origin: ${CONFIG.server.corsOrigin}`);
-console.log(`⏱  Request timeout: ${CONFIG.server.requestTimeoutMs / 1000}s`);
-console.log(
-  `🚦 Rate limit: ${CONFIG.server.rateLimitMaxRequests} req / ${CONFIG.server.rateLimitWindowMs / 1000}s per session\n`,
-);
-
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
-function getSession(sessionId: string): Session {
-  const now = Date.now();
-  let session = sessions.get(sessionId);
-
-  if (!session || now - session.lastAccess > SESSION_TTL_MS) {
-    session = { messages: [], lastAccess: now };
-    sessions.set(sessionId, session);
-    return session;
-  }
-
-  session.lastAccess = now;
-  return session;
-}
-
-function pruneStale() {
-  const now = Date.now();
-  for (const [id, s] of sessions) {
-    if (now - s.lastAccess > SESSION_TTL_MS) sessions.delete(id);
-  }
-}
-
-// ─── Routes ──────────────────────────────────────────────────────────────────
-
-// Health check
-app.get("/api/health", (c) => {
-  return c.json({ status: "ok", chunksLoaded: chunkCount });
-});
-
-// List all chunks from guide.yaml
-app.get("/api/chunks", async (c) => {
   try {
-    const guide = await readFile(GUIDE_PATH, "utf-8");
-    const chunks: Array<{
-      chunk_id: string;
-      topic: string;
-      summary: string;
-      status: string;
-    }> = [];
+    const algorithm = CONFIG.auth.jwtAlgorithm;
 
-    const blocks = guide
-      .split(/^\s{2}- chunk_id:/m)
-      .filter((b) => b.trim() && !b.trim().startsWith("#"));
-
-    for (const block of blocks) {
-      const chunk_id = block.match(/^\s*([^\n]+)/)?.[1]?.trim() ?? "";
-      const topic = block.match(/\n\s+topic:\s*(.+)/)?.[1]?.trim() ?? "";
-      const summary =
-        block.match(/summary:\s*>\s*\n\s+(.+)/)?.[1]?.trim() ?? "";
-      const status =
-        block.match(/\n\s+status:\s*(\w+)/)?.[1]?.trim() ?? "active";
-
-      if (chunk_id && topic) {
-        chunks.push({ chunk_id, topic, summary, status });
+    if (algorithm === "HS256") {
+      const secret = process.env.JWT_SECRET;
+      if (!secret) {
+        logger.error(
+          "JWT_SECRET env var is not set — cannot verify HS256 tokens",
+        );
+        return null;
       }
+      const key = new TextEncoder().encode(secret);
+      const { payload } = await jwtVerify(token, key, {
+        algorithms: ["HS256"],
+      });
+      const userId = payload[CONFIG.auth.userIdClaim];
+      return typeof userId === "string" && userId.length > 0 ? userId : null;
     }
 
-    return c.json({ chunks, count: chunks.length });
+    // RS256: verify against JWKS endpoint or PEM public key.
+    const publicKeyPem = process.env.JWT_PUBLIC_KEY;
+    if (publicKeyPem) {
+      // Import PEM-encoded public key.
+      const key = await crypto.subtle.importKey(
+        "spki",
+        Buffer.from(
+          publicKeyPem.replace(/-----[^-]+-----/g, "").replace(/\s/g, ""),
+          "base64",
+        ),
+        { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
+        false,
+        ["verify"],
+      );
+      const { payload } = await jwtVerify(token, key, {
+        algorithms: ["RS256"],
+      });
+      const userId = payload[CONFIG.auth.userIdClaim];
+      return typeof userId === "string" && userId.length > 0 ? userId : null;
+    }
+
+    // Fallback to JWKS endpoint.
+    const { payload } = await jwtVerify(token, getJwks(), {
+      algorithms: ["RS256"],
+    });
+    const userId = payload[CONFIG.auth.userIdClaim];
+    return typeof userId === "string" && userId.length > 0 ? userId : null;
   } catch (err) {
-    console.error("[/api/chunks] Error:", err);
-    return c.json({ error: "Failed to read guide.yaml" }, 500);
+    logger.debug("JWT verification failed", {
+      reason: err instanceof Error ? err.message : String(err),
+    });
+    return null;
   }
+}
+
+// ─── Auth middleware ───────────────────────────────────────────────────────────
+
+async function requireAuth(
+  c: any,
+  next: () => Promise<void>,
+): Promise<Response | void> {
+  const userId = await authenticateRequest(c.req.header("Authorization"));
+  if (!userId) return c.json({ error: "Unauthorized" }, 401);
+  c.set("userId" as never, userId);
+  return next();
+}
+
+app.use("/answer", requireAuth);
+app.use("/sessions", requireAuth);
+app.use("/sessions/*", requireAuth);
+
+// ─── Routes ───────────────────────────────────────────────────────────────────
+
+// Health check — no auth required.
+app.get("/health", (c) => {
+  return c.json({ status: "ok", breaker: getBreakerState() });
 });
 
 /**
- * POST /api/chat
+ * POST /answer
+ * Submit a user message and receive a pipeline response.
  *
- * Request body: { message: string, sessionId: string, mode?: "clarify" | "answer" }
- *
- * Response: JSON envelope the frontend uses to render MDX components.
- * Single response:  { type, data }
- * Multiple responses: [{ type, data }, { type, data }, ...]
+ * Body: { message: string, session_id?: string }
+ * Response: TurnResult shape — session_id, action, response, response_type, citations
  */
-app.post("/api/chat", async (c) => {
-  const startTime = Date.now();
-  // Short random ID to correlate all logs for this single request
+app.post("/answer", async (c) => {
   const reqId = crypto.randomUUID().slice(0, 8);
 
   return runWithRequestId(reqId, async () => {
     if (isShuttingDown)
       return c.json({ error: "Server is shutting down" }, 503);
+
+    // Body size guard.
+    const contentLength = Number(c.req.header("content-length") ?? 0);
+    if (contentLength > CONFIG.server.maxBodyBytes)
+      return c.json({ error: "Request body too large" }, 413);
+
+    let body: { message?: string; session_id?: string };
     try {
-      // ── Body size guard ───────────────────────────────────────────────────
-      const contentLength = Number(c.req.header("content-length") ?? 0);
-      if (contentLength > CONFIG.server.maxBodyBytes) {
-        return c.json({ error: "Request body too large" }, 413);
-      }
-
-      const body = await c.req.json();
-      const {
-        message,
-        sessionId,
-        mode = "answer",
-      } = body as {
-        message: string;
-        sessionId: string;
-        mode?: Mode;
-      };
-
-      if (!message || !sessionId) {
-        return c.json(
-          { error: "Both 'message' and 'sessionId' are required" },
-          400,
-        );
-      }
-
-      // ── Rate limit guard ───────────────────────────────────────────────────────
-      if (isRateLimited(sessionId)) {
-        return c.json(
-          {
-            error:
-              "Too many requests. Please wait before sending another message.",
-            retryAfterMs: CONFIG.server.rateLimitWindowMs,
-          },
-          429,
-        );
-      }
-
-      pruneStale();
-      const session = getSession(sessionId);
-
-      // ── Request timeout ────────────────────────────────────────────────────────
-      // Race the LLM pipeline against an AbortSignal-driven timeout.
-      // When the timeout fires, the response is sent immediately and the
-      // in-flight LLM call is abandoned (the provider connection is dropped).
-      const timeoutMs = CONFIG.server.requestTimeoutMs;
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-
-      let raw: string;
-      let parsed: unknown;
-      let contextChunks: Awaited<
-        ReturnType<typeof answerTroubleshootingQuestion>
-      >["contextChunks"];
-
-      try {
-        const result = await Promise.race([
-          answerTroubleshootingQuestion(message, session.messages, mode),
-          new Promise<never>((_, reject) =>
-            controller.signal.addEventListener("abort", () =>
-              reject(new Error("Request timed out")),
-            ),
-          ),
-        ]);
-        raw = result.raw;
-        parsed = result.parsed;
-        contextChunks = result.contextChunks;
-      } finally {
-        clearTimeout(timeoutId);
-      }
-
-      // Persist turn
-      session.messages.push(
-        { role: "user", content: message },
-        { role: "assistant", content: raw },
-      );
-
-      while (session.messages.length > SESSION_MAX_MESSAGES) {
-        session.messages.splice(0, 2);
-      }
-
-      // ── Fire-and-forget log — never delays the response ──────────────────
-      writeLog({
-        reqId,
-        timestamp: new Date().toISOString(),
-        sessionId,
-        mode,
-        question: message,
-        responseEnvelope: parsed,
-        durationMs: Date.now() - startTime,
-      });
-
-      return c.json(
-        {
-          response: parsed,
-          // NEW
-          contextChunks: contextChunks
-            .filter(
-              (chunk, index, self) =>
-                self.findIndex((c) => c.source === chunk.source) === index,
-            )
-            .map((chunk) => ({
-              chunk_id: chunk.chunk_id,
-              topic: chunk.topic,
-              summary: chunk.summary,
-              file: chunk.source,
-            })),
-        },
-        200,
-        { "X-Request-Id": reqId },
-      );
-    } catch (err: any) {
-      const isTimeout = err?.message === "Request timed out";
-      console.error(`[${reqId}] /api/chat error:`, err);
-
-      if (isTimeout) {
-        return c.json(
-          {
-            error: "The AI is taking too long to respond. Please try again.",
-            code: "TIMEOUT",
-            reqId,
-          },
-          504,
-        );
-      }
-      return c.json({ error: "Internal server error", reqId }, 500);
+      body = await c.req.json();
+    } catch {
+      return c.json({ error: "Invalid JSON body" }, 400);
     }
-  }); // end runWithRequestId
+
+    const { message, session_id } = body;
+    if (!message || typeof message !== "string")
+      return c.json({ error: "'message' is required" }, 400);
+
+    const userId = c.get("userId" as never) as string;
+
+    // Request timeout.
+    const controller = new AbortController();
+    const timeoutId = setTimeout(
+      () => controller.abort(),
+      CONFIG.server.requestTimeoutMs,
+    );
+
+    try {
+      const result = await Promise.race([
+        runPipeline(userId, message, session_id),
+        new Promise<never>((_, reject) =>
+          controller.signal.addEventListener("abort", () =>
+            reject(new Error("Request timed out")),
+          ),
+        ),
+      ]);
+
+      // Map quota_exceeded to HTTP 429.
+      if (result.response_type === "quota_exceeded") {
+        return c.json(result, 429);
+      }
+
+      return c.json(result, 200, { "X-Request-Id": reqId });
+    } catch (err: any) {
+      if (err?.message === "Request timed out") {
+        logger.error(`[${reqId}] /answer timeout`);
+        return c.json({ error: "Request timed out", code: "TIMEOUT" }, 504);
+      }
+      logger.error(`[${reqId}] /answer error`, { err: err?.message });
+      return c.json({ error: "Internal server error" }, 500);
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  });
 });
 
-// ─── Graceful shutdown ───────────────────────────────────────────────────────
-//
-// On SIGTERM (Docker stop, PM2 reload) or SIGINT (Ctrl+C):
-//   1. Stop accepting new connections (Bun server close is implicit via exit).
-//   2. Give in-flight requests up to 5s to drain.
-//   3. Exit cleanly so the process manager can restart without orphan processes.
+/**
+ * GET /sessions
+ * List all sessions for the authenticated user, sorted by recency.
+ */
+app.get("/sessions", async (c) => {
+  const userId = c.get("userId" as never) as string;
+  try {
+    const sessions = await Session.list(userId);
+    return c.json(sessions);
+  } catch (err) {
+    logger.error("/sessions list error", { err });
+    return c.json({ error: "Internal server error" }, 500);
+  }
+});
+
+/**
+ * GET /sessions/:sessionId
+ * Return the full turn history for a session.
+ */
+app.get("/sessions/:sessionId", async (c) => {
+  const userId = c.get("userId" as never) as string;
+  const sessionId = c.req.param("sessionId");
+
+  try {
+    const session = await Session.load(userId, sessionId);
+    return c.json({
+      session_id: session.session_id,
+      user_id: session.user_id,
+      title: session.title,
+      created_at: session.created_at,
+      turns: session.turns,
+    });
+  } catch (err: any) {
+    if (err?.message?.includes("not found"))
+      return c.json({ error: "Session not found" }, 404);
+    logger.error("/sessions/:id error", { err });
+    return c.json({ error: "Internal server error" }, 500);
+  }
+});
+
+// ─── Graceful shutdown ────────────────────────────────────────────────────────
 
 let isShuttingDown = false;
 
 function shutdown(signal: string): void {
   if (isShuttingDown) return;
   isShuttingDown = true;
-
-  console.log(`\n⏹  ${signal} received — graceful shutdown initiated`);
-
-  // Allow up to 5 seconds for in-flight requests to complete
+  logger.info(`${signal} received — graceful shutdown initiated`);
   setTimeout(() => {
-    console.log("✅ Shutdown complete");
+    logger.info("Shutdown complete");
     process.exit(0);
-  }, 5_000).unref(); // .unref() so the timer doesn't keep the event loop alive
+  }, 5_000).unref();
 }
 
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("SIGINT", () => shutdown("SIGINT"));
 
-// ─── Periodic stale session cleanup ─────────────────────────────────────────
-// Runs every 5 minutes regardless of request traffic.
+// ─── Startup ──────────────────────────────────────────────────────────────────
 
-setInterval(pruneStale, 5 * 60 * 1000).unref();
+// Warn at startup if JWT_SECRET is missing (HS256 mode) — don't crash so
+// development without auth still works, but make the gap obvious.
+if (CONFIG.auth.jwtAlgorithm === "HS256" && !process.env.JWT_SECRET) {
+  logger.warn(
+    "JWT_SECRET env var is not set. HS256 verification will reject all tokens. Set JWT_SECRET to enable auth.",
+  );
+}
 
-// ─── Start ────────────────────────────────────────────────────────────────────
+await preload();
+
+logger.info("Server ready", {
+  corsOrigin: CONFIG.server.corsOrigin,
+  timeoutMs: CONFIG.server.requestTimeoutMs,
+});
+
+console.log("🚀 Server ready — http://localhost:3000");
+
+// ─── Export ───────────────────────────────────────────────────────────────────
 
 export default {
   port: 3000,

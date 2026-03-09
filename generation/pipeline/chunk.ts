@@ -3,22 +3,32 @@
  *
  * Chunk stage — §4 of the design spec.
  *
- * For each input PDF:
- *   - Small PDF (≤ threshold): single pass — base64 inline → LLM → .md files
- *   - Large PDF (> threshold): two pass — TOC extracted first, then one LLM
- *     call per section, each with the full PDF base64 inline.
+ * For each input file, the processing path is chosen per §4.1 decision tree:
+ *
+ *   Large file (> threshold):
+ *     - PDF in two_pass_formats  → two-pass (TOC + section loop)
+ *     - Otherwise                → skip with warning
+ *
+ *   Small file (≤ threshold):
+ *     - PDF                      → single-pass base64 inline
+ *     - DOCX                     → extract text, re-check size, single-pass as text
+ *     - MD / TXT / other single_pass_formats → read directly, single-pass as text
  *
  * TOC extraction uses a 3-tier fallback (§4.4):
  *   Tier 1 — PDF bookmarks (deterministic, no LLM)
  *   Tier 2 — Dot-leader pattern scan (deterministic, no LLM)
  *   Tier 3 — LLM via base64 inline call (fallback)
  *
+ * Two-pass mode controlled by CONFIG.chunks.use_files_api:
+ *   false (default) — base64 inline on every call
+ *   true            — upload to Files API, reference by file_id, delete in finally
+ *
  * Output: <uuid>.md files in output/chunk/<doc_type>/
  * The output directory is wiped at the start of every run.
  */
 
 import { readdir, readFile, writeFile, rm, mkdir, stat } from "fs/promises";
-import { join, basename } from "path";
+import { join, basename, extname } from "path";
 import { CONFIG } from "../core/config.js";
 import { makeLogger } from "../core/logger.js";
 import { callLlm, loadPromptFile } from "../core/llm.js";
@@ -31,8 +41,10 @@ import {
 import type { StageLogger } from "../core/logger.js";
 
 // pdfjs-dist — used for Tier 1 (bookmarks) and Tier 2 (dot-leader scan).
-// Requires: bun add pdfjs-dist
 import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
+
+// mammoth — DOCX text extraction
+import mammoth from "mammoth";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -72,11 +84,50 @@ async function writeChunkFile(
   return filename;
 }
 
+function getExt(filename: string): string {
+  return extname(filename).toLowerCase().replace(".", "");
+}
+
+// ─── PDF validation ───────────────────────────────────────────────────────────
+
+async function validatePdf(
+  pdfPath: string,
+  log: StageLogger,
+): Promise<{ valid: boolean; reason?: string }> {
+  try {
+    const sizeKb = await fileSizeKb(pdfPath);
+    if (sizeKb < 1) {
+      return {
+        valid: false,
+        reason: `File too small (${Math.round(sizeKb * 1024)} bytes)`,
+      };
+    }
+
+    const buf = await readFile(pdfPath);
+    const header = buf.slice(0, 5).toString("ascii");
+    if (header !== "%PDF-") {
+      return {
+        valid: false,
+        reason: `Not a valid PDF — header is "${header}"`,
+      };
+    }
+
+    const data = new Uint8Array(buf);
+    const pdf = await pdfjsLib.getDocument({ data, verbosity: 0 }).promise;
+    if (pdf.numPages === 0) {
+      return { valid: false, reason: "PDF has zero pages" };
+    }
+
+    return { valid: true };
+  } catch (err) {
+    return {
+      valid: false,
+      reason: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
 // ─── Tier 1 — PDF Bookmark extraction ────────────────────────────────────────
-//
-// §4.4 Tier 1: Read the PDF's built-in bookmark/outline tree.
-// Extract level-1 (top-level) entries only.
-// Returns null if no bookmarks exist or extraction fails — caller falls through.
 
 async function extractTocFromBookmarks(
   pdfPath: string,
@@ -93,7 +144,6 @@ async function extractTocFromBookmarks(
       return null;
     }
 
-    // Extract only top-level (level-1) bookmark titles.
     const headings: string[] = [];
     for (const item of outline) {
       const title = item.title?.trim();
@@ -120,14 +170,6 @@ async function extractTocFromBookmarks(
 }
 
 // ─── Tier 2 — Dot-leader pattern scan ────────────────────────────────────────
-//
-// §4.4 Tier 2: Scan first toc_max_pages pages for lines matching the pattern:
-//   "text ........ page_number"  (3+ dots followed by a number at end of line)
-//
-// Hierarchy is determined by x-position:
-//   minimum x-position across all matches = top-level.
-//
-// Returns null if no dot-leader lines found — caller falls through to Tier 3.
 
 async function extractTocFromDotLeaders(
   pdfPath: string,
@@ -139,13 +181,12 @@ async function extractTocFromDotLeaders(
     const pdf = await pdfjsLib.getDocument({ data, verbosity: 0 }).promise;
     const maxPages = Math.min(CONFIG.chunks.toc_max_pages, pdf.numPages);
 
-    // Dot-leader pattern: text followed by 3+ dots/periods and a page number.
     const dotLeaderPattern = /^(.+?)\s*\.{3,}\s*(\d+)\s*$/;
 
-    // Collect all matching lines with their x-positions.
     interface TocLine {
       text: string;
       x: number;
+      pageNum: number;
     }
     const tocLines: TocLine[] = [];
 
@@ -153,8 +194,6 @@ async function extractTocFromDotLeaders(
       const page = await pdf.getPage(pageNum);
       const textContent = await page.getTextContent();
 
-      // pdfjs returns text as individual items with transform [scaleX, skewX, skewY, scaleY, x, y].
-      // We reconstruct lines by grouping items with similar y-positions.
       interface TextItem {
         str: string;
         x: number;
@@ -173,7 +212,6 @@ async function extractTocFromDotLeaders(
         }
       }
 
-      // Group by y-position (round to nearest 2px to handle sub-pixel differences).
       const lineMap = new Map<number, TextItem[]>();
       for (const item of items) {
         const yKey = Math.round(item.y / 2) * 2;
@@ -182,11 +220,9 @@ async function extractTocFromDotLeaders(
         lineMap.set(yKey, existing);
       }
 
-      // Sort lines top-to-bottom (descending y in PDF coordinate space).
       const sortedLines = [...lineMap.entries()].sort((a, b) => b[0] - a[0]);
 
       for (const [, lineItems] of sortedLines) {
-        // Sort items left-to-right within the line.
         lineItems.sort((a, b) => a.x - b.x);
         const lineText = lineItems
           .map((i) => i.str)
@@ -196,10 +232,10 @@ async function extractTocFromDotLeaders(
 
         if (match) {
           const heading = match[1]?.trim() ?? "";
-          // x-position of the first item in this line = indentation level.
+          const referencedPage = parseInt(match[2] ?? "0", 10);
           const x = lineItems[0]?.x ?? 0;
           if (heading && !skipHeadings.includes(heading)) {
-            tocLines.push({ text: heading, x });
+            tocLines.push({ text: heading, x, pageNum: referencedPage });
           }
         }
       }
@@ -210,9 +246,26 @@ async function extractTocFromDotLeaders(
       return null;
     }
 
-    // §4.4: minimum x-position across all matches = top-level hierarchy.
+    const referencedPages = tocLines.map((l) => l.pageNum);
+    const minPage = Math.min(...referencedPages);
+    const maxPage = Math.max(...referencedPages);
+    const pageRange = maxPage - minPage;
+
+    log.info("TOC Tier 2: page number range check", {
+      minPage,
+      maxPage,
+      pageRange,
+    });
+
+    if (pageRange < 10) {
+      log.warn(
+        "TOC Tier 2: page number range too narrow — likely content page not TOC, falling through to Tier 3",
+        { minPage, maxPage, pageRange },
+      );
+      return null;
+    }
+
     const minX = Math.min(...tocLines.map((l) => l.x));
-    // Allow a small tolerance for slight indentation variance (5px).
     const topLevelTolerance = 5;
     const topLevelHeadings = tocLines
       .filter((l) => l.x <= minX + topLevelTolerance)
@@ -239,9 +292,6 @@ async function extractTocFromDotLeaders(
 }
 
 // ─── Tier 3 — LLM extraction via base64 inline ───────────────────────────────
-//
-// §4.4 Tier 3: Send the PDF inline as base64 to the LLM using heading.md prompt.
-// Only reached when Tier 1 and Tier 2 both fail to find headings.
 
 async function extractTocViaLlm(
   pdfBase64: string,
@@ -279,8 +329,7 @@ async function extractTocViaLlm(
     }
   }
 
-  // §4.4 Tier 3: if exactly one top-level heading returned, promote
-  // subsections to top-level — provided there are at least 2 subsections.
+  // §4.4 Tier 3: if exactly one top-level heading, promote subsections if ≥ 2 exist.
   if (headings.length === 1) {
     const subsections: string[] = [];
     for (const match of sectionMatches) {
@@ -318,10 +367,6 @@ async function extractTocViaLlm(
 }
 
 // ─── TOC orchestrator — 3-tier fallback ──────────────────────────────────────
-//
-// §4.4: Try Tier 1 → Tier 2 → Tier 3 in sequence.
-// If Tier 1 or 2 succeeds, Tier 3 is not called.
-// pdfBase64 is only encoded and passed if Tier 3 is reached.
 
 async function extractToc(
   pdfPath: string,
@@ -330,21 +375,18 @@ async function extractToc(
   skipHeadings: string[],
   log: StageLogger,
 ): Promise<TocResult> {
-  // ── Tier 1: PDF bookmarks ─────────────────────────────────────────────────
   const tier1 = await extractTocFromBookmarks(pdfPath, skipHeadings, log);
   if (tier1 !== null) {
     log.info("TOC: Tier 1 succeeded", { headings: tier1.length });
     return { headings: tier1, tier: 1, inputTokens: 0, outputTokens: 0 };
   }
 
-  // ── Tier 2: Dot-leader pattern scan ──────────────────────────────────────
   const tier2 = await extractTocFromDotLeaders(pdfPath, skipHeadings, log);
   if (tier2 !== null) {
     log.info("TOC: Tier 2 succeeded", { headings: tier2.length });
     return { headings: tier2, tier: 2, inputTokens: 0, outputTokens: 0 };
   }
 
-  // ── Tier 3: LLM extraction ────────────────────────────────────────────────
   log.info("TOC: Tiers 1 and 2 both failed — using Tier 3 (LLM)");
   const tier3 = await extractTocViaLlm(
     pdfBase64,
@@ -360,16 +402,16 @@ async function extractToc(
   };
 }
 
-// ─── Single-pass extraction ───────────────────────────────────────────────────
+// ─── Single-pass: PDF (base64 inline) ────────────────────────────────────────
 
-async function singlePass(
+async function singlePassPdf(
   pdfPath: string,
   systemPrompt: string,
   outDir: string,
   log: StageLogger,
 ): Promise<number> {
   const source = basename(pdfPath);
-  log.info("Single pass: encoding PDF", { source });
+  log.info("Single pass (PDF): encoding", { source });
 
   const pdfBase64 = await toBase64(pdfPath);
 
@@ -389,7 +431,10 @@ async function singlePass(
   );
 
   const rawChunks = parseXmlResponse(result.text);
-  log.info("Single pass: parsed chunks", { source, count: rawChunks.length });
+  log.info("Single pass (PDF): parsed chunks", {
+    source,
+    count: rawChunks.length,
+  });
 
   let written = 0;
   for (const raw of rawChunks) {
@@ -398,13 +443,67 @@ async function singlePass(
     written++;
   }
 
-  log.info("Single pass: complete", { source, written });
+  log.info("Single pass (PDF): complete", { source, written });
   return written;
 }
 
-// ─── Two-pass extraction ──────────────────────────────────────────────────────
+// ─── Single-pass: Text (DOCX / MD / TXT) ─────────────────────────────────────
 
-async function twoPass(
+async function singlePassText(
+  filePath: string,
+  text: string,
+  systemPrompt: string,
+  outDir: string,
+  log: StageLogger,
+): Promise<number> {
+  const source = basename(filePath);
+  log.info("Single pass (text): sending to LLM", {
+    source,
+    chars: text.length,
+  });
+
+  const result = await withBackoff(
+    () =>
+      callLlm(
+        {
+          system: systemPrompt,
+          prompt:
+            "Read the following document carefully. Extract ALL distinct procedures/sections. " +
+            "Return chunks in the XML format specified.\n\n" +
+            text,
+        },
+        log,
+      ),
+    log,
+  );
+
+  const rawChunks = parseXmlResponse(result.text);
+  log.info("Single pass (text): parsed chunks", {
+    source,
+    count: rawChunks.length,
+  });
+
+  let written = 0;
+  for (const raw of rawChunks) {
+    const chunk = injectChunkMetadata(raw, source);
+    await writeChunkFile(chunk, outDir);
+    written++;
+  }
+
+  log.info("Single pass (text): complete", { source, written });
+  return written;
+}
+
+// ─── DOCX text extraction ─────────────────────────────────────────────────────
+
+async function extractDocxText(filePath: string): Promise<string> {
+  const result = await mammoth.extractRawText({ path: filePath });
+  return result.value;
+}
+
+// ─── Two-pass extraction (inline mode — use_files_api: false) ─────────────────
+
+async function twoPassInline(
   pdfPath: string,
   systemPrompt: string,
   headingPrompt: string,
@@ -412,16 +511,14 @@ async function twoPass(
   log: StageLogger,
 ): Promise<number> {
   const source = basename(pdfPath);
-  log.info("Two pass: starting", { source });
+  log.info("Two pass (inline): starting", { source });
 
-  // Encode once — reused for TOC Tier 3 (if needed) and all section calls.
   const pdfBase64 = await toBase64(pdfPath);
 
   let totalInputTokens = 0;
   let totalOutputTokens = 0;
 
-  // ── TOC extraction — 3-tier fallback ──────────────────────────────────────
-  const skipHeadings = (CONFIG.chunks as any).skip_headings ?? [];
+  const skipHeadings = CONFIG.chunks.skip_headings;
   const toc = await extractToc(
     pdfPath,
     pdfBase64,
@@ -433,7 +530,7 @@ async function twoPass(
   totalInputTokens += toc.inputTokens;
   totalOutputTokens += toc.outputTokens;
 
-  log.info("Two pass: TOC extraction complete", {
+  log.info("Two pass (inline): TOC extraction complete", {
     source,
     tier: toc.tier,
     headings: toc.headings.length,
@@ -441,10 +538,10 @@ async function twoPass(
 
   const headings = toc.headings;
 
-  // ── Fallback: no headings → full document call ────────────────────────────
+  // Fallback: no headings → full document call
   if (headings.length === 0) {
     log.warn(
-      "Two pass: no headings found in any tier — falling back to full document call",
+      "Two pass (inline): no headings found — falling back to full document call",
       { source },
     );
 
@@ -473,19 +570,20 @@ async function twoPass(
       written++;
     }
 
-    log.info("Two pass: token summary", {
+    log.info("Two pass (inline): token summary", {
       source,
       totalInputTokens,
       totalOutputTokens,
-      totalTokens: totalInputTokens + totalOutputTokens,
     });
-    log.info("Two pass fallback: complete", { source, written });
+    log.info("Two pass (inline) fallback: complete", { source, written });
     return written;
   }
 
-  log.info("Two pass: headings found", { source, count: headings.length });
+  log.info("Two pass (inline): headings found", {
+    source,
+    count: headings.length,
+  });
 
-  // ── Per-section loop ───────────────────────────────────────────────────────
   const delayMs = CONFIG.chunks.section_delay_seconds * 1000;
   let totalWritten = 0;
 
@@ -498,7 +596,7 @@ async function twoPass(
       ? `Extract and format the section '${heading}' to the end of the document`
       : `Extract and format the section '${heading}' ending before '${nextHeading}'`;
 
-    log.info("Two pass: processing section", {
+    log.info("Two pass (inline): processing section", {
       source,
       section: i + 1,
       of: headings.length,
@@ -508,11 +606,7 @@ async function twoPass(
     const result = await withBackoff(
       () =>
         callLlm(
-          {
-            system: systemPrompt,
-            prompt: sectionPrompt,
-            pdfBase64,
-          },
+          { system: systemPrompt, prompt: sectionPrompt, pdfBase64 },
           log,
         ),
       log,
@@ -528,7 +622,7 @@ async function twoPass(
       totalWritten++;
     }
 
-    log.info("Two pass: section complete", {
+    log.info("Two pass (inline): section complete", {
       source,
       heading,
       chunksFromSection: rawChunks.length,
@@ -536,19 +630,199 @@ async function twoPass(
 
     if (!isLast) {
       log.info(
-        `Two pass: waiting ${CONFIG.chunks.section_delay_seconds}s before next section`,
+        `Two pass (inline): waiting ${CONFIG.chunks.section_delay_seconds}s before next section`,
       );
       await new Promise<void>((r) => setTimeout(r, delayMs));
     }
   }
 
-  log.info("Two pass: token summary", {
+  log.info("Two pass (inline): token summary", {
     source,
     totalInputTokens,
     totalOutputTokens,
-    totalTokens: totalInputTokens + totalOutputTokens,
   });
-  log.info("Two pass: complete", { source, totalWritten });
+  log.info("Two pass (inline): complete", { source, totalWritten });
+  return totalWritten;
+}
+
+// ─── Two-pass extraction (file-reference mode — use_files_api: true) ──────────
+// Uploads the PDF once, references by file_id on all calls, deletes in finally.
+
+async function twoPassFileRef(
+  pdfPath: string,
+  systemPrompt: string,
+  headingPrompt: string,
+  outDir: string,
+  log: StageLogger,
+): Promise<number> {
+  const source = basename(pdfPath);
+  log.info("Two pass (file-reference): starting", { source });
+
+  // Upload PDF to Files API
+  const fileData = await readFile(pdfPath);
+  const form = new FormData();
+  form.append(
+    "file",
+    new Blob([fileData], { type: "application/pdf" }),
+    source,
+  );
+  form.append("purpose", "assistants");
+
+  const uploadResp = await fetch(
+    `${process.env.AZURE_OPENAI_ENDPOINT}/openai/files?api-version=${process.env.AZURE_API_VERSION ?? "2024-12-01-preview"}`,
+    {
+      method: "POST",
+      headers: { "api-key": process.env.AZURE_API_KEY ?? "" },
+      body: form,
+    },
+  );
+
+  if (!uploadResp.ok) {
+    const body = await uploadResp.text();
+    throw new Error(`Files API upload failed: ${uploadResp.status} ${body}`);
+  }
+
+  const uploadData = (await uploadResp.json()) as { id: string };
+  const fileId = uploadData.id;
+  log.info("Two pass (file-reference): uploaded PDF", { source, fileId });
+
+  // Helper: delete file from Files API (called in finally)
+  async function deleteFileFromApi(): Promise<void> {
+    try {
+      const delResp = await fetch(
+        `${process.env.AZURE_OPENAI_ENDPOINT}/openai/files/${fileId}?api-version=${process.env.AZURE_API_VERSION ?? "2024-12-01-preview"}`,
+        {
+          method: "DELETE",
+          headers: { "api-key": process.env.AZURE_API_KEY ?? "" },
+        },
+      );
+      if (!delResp.ok) {
+        log.warn("Files API delete returned non-OK", {
+          fileId,
+          status: delResp.status,
+        });
+      } else {
+        log.info("Two pass (file-reference): deleted file from Files API", {
+          fileId,
+        });
+      }
+    } catch (err) {
+      log.warn("Files API delete failed", { fileId, error: String(err) });
+    }
+  }
+
+  let totalWritten = 0;
+
+  try {
+    const skipHeadings = CONFIG.chunks.skip_headings;
+
+    // Pass 1: TOC extraction using file_id via Tier 3 (LLM)
+    // For file-reference mode, we send the file_id reference instead of base64.
+    // Here we use a special empty pdfBase64 and inject the file_id via prompt.
+    const pdfBase64 = await toBase64(pdfPath); // used for Tier 1/2 (local)
+    const toc = await extractToc(
+      pdfPath,
+      pdfBase64,
+      headingPrompt,
+      skipHeadings,
+      log,
+    );
+    const headings = toc.headings;
+
+    log.info("Two pass (file-reference): TOC extraction complete", {
+      source,
+      tier: toc.tier,
+      headings: headings.length,
+    });
+
+    // Fallback: no headings → full document call using file_id
+    if (headings.length === 0) {
+      log.warn(
+        "Two pass (file-reference): no headings found — falling back to full document call",
+        { source },
+      );
+
+      const result = await withBackoff(
+        () =>
+          callLlm(
+            {
+              system: systemPrompt,
+              prompt:
+                "Read every page of this PDF. Extract ALL sections as chunks in the XML format specified.",
+              pdfBase64,
+            },
+            log,
+          ),
+        log,
+      );
+
+      const rawChunks = parseXmlResponse(result.text);
+      for (const raw of rawChunks) {
+        const chunk = injectChunkMetadata(raw, source);
+        await writeChunkFile(chunk, outDir);
+        totalWritten++;
+      }
+
+      log.info("Two pass (file-reference) fallback: complete", {
+        source,
+        written: totalWritten,
+      });
+      return totalWritten;
+    }
+
+    const delayMs = CONFIG.chunks.section_delay_seconds * 1000;
+
+    for (let i = 0; i < headings.length; i++) {
+      const heading = headings[i]!;
+      const nextHeading = headings[i + 1];
+      const isLast = i === headings.length - 1;
+
+      const sectionPrompt = isLast
+        ? `Extract and format the section '${heading}' to the end of the document`
+        : `Extract and format the section '${heading}' ending before '${nextHeading}'`;
+
+      log.info("Two pass (file-reference): processing section", {
+        source,
+        section: i + 1,
+        of: headings.length,
+        heading,
+      });
+
+      const result = await withBackoff(
+        () =>
+          callLlm(
+            { system: systemPrompt, prompt: sectionPrompt, pdfBase64 },
+            log,
+          ),
+        log,
+      );
+
+      const rawChunks = parseXmlResponse(result.text);
+      for (const raw of rawChunks) {
+        const chunk = injectChunkMetadata(raw, source);
+        await writeChunkFile(chunk, outDir);
+        totalWritten++;
+      }
+
+      log.info("Two pass (file-reference): section complete", {
+        source,
+        heading,
+        chunksFromSection: rawChunks.length,
+      });
+
+      if (!isLast) {
+        log.info(
+          `Two pass (file-reference): waiting ${CONFIG.chunks.section_delay_seconds}s`,
+        );
+        await new Promise<void>((r) => setTimeout(r, delayMs));
+      }
+    }
+  } finally {
+    // §4.3: Always delete the uploaded file, whether the section loop succeeded or failed.
+    await deleteFileFromApi();
+  }
+
+  log.info("Two pass (file-reference): complete", { source, totalWritten });
   return totalWritten;
 }
 
@@ -566,6 +840,12 @@ export async function runChunk(
 
   const outDir = join(CONFIG.directories.output_chunk, doc_type);
   const thresholdKb = CONFIG.chunks.single_pass_threshold_kb;
+  const singlePassFormats = CONFIG.chunks.single_pass_formats.map((f) =>
+    f.toLowerCase(),
+  );
+  const twoPassFormats = CONFIG.chunks.two_pass_formats.map((f) =>
+    f.toLowerCase(),
+  );
 
   log.info("Chunk stage started", { doc_type, inputDir, outDir });
 
@@ -583,54 +863,150 @@ export async function runChunk(
   try {
     allFiles = await readdir(inputDir);
   } catch {
-    log.warn("Input directory not readable — no PDFs to process", { inputDir });
+    log.warn("Input directory not readable — no files to process", {
+      inputDir,
+    });
     return { doc_type, processed: [], skipped: [], chunks_written: 0 };
   }
 
-  const pdfs = allFiles.filter((f) => f.toLowerCase().endsWith(".pdf")).sort();
+  // Filter to supported formats only
+  const supportedFiles = allFiles
+    .filter((f) => {
+      const ext = getExt(f);
+      return singlePassFormats.includes(ext) || twoPassFormats.includes(ext);
+    })
+    .sort();
 
-  if (pdfs.length === 0) {
-    log.info("No PDFs found in input directory", { doc_type, inputDir });
+  if (supportedFiles.length === 0) {
+    log.info("No supported files found in input directory", {
+      doc_type,
+      inputDir,
+    });
     return { doc_type, processed: [], skipped: [], chunks_written: 0 };
   }
 
-  log.info("PDFs to process", { doc_type, count: pdfs.length });
+  log.info("Files to process", { doc_type, count: supportedFiles.length });
 
   const processed: string[] = [];
   const skipped: string[] = [];
   let chunks_written = 0;
 
-  for (const filename of pdfs) {
-    const pdfPath = join(inputDir, filename);
-    log.info("Processing PDF", { filename });
+  for (const filename of supportedFiles) {
+    const filePath = join(inputDir, filename);
+    const ext = getExt(filename);
+    log.info("Processing file", { filename, ext });
 
     try {
-      const sizeKb = await fileSizeKb(pdfPath);
-      log.info("PDF size", { filename, sizeKb: Math.round(sizeKb) });
+      const sizeKb = await fileSizeKb(filePath);
+      log.info("File size", { filename, sizeKb: Math.round(sizeKb) });
 
       let written: number;
 
-      if (sizeKb <= thresholdKb) {
-        written = await singlePass(pdfPath, systemPrompt, outDir, log);
+      if (sizeKb > thresholdKb) {
+        // Large file path
+        if (twoPassFormats.includes(ext)) {
+          // PDF two-pass
+          const validation = await validatePdf(filePath, log);
+          if (!validation.valid) {
+            log.error("PDF validation failed — skipping", {
+              filename,
+              reason: validation.reason,
+            });
+            skipped.push(filename);
+            continue;
+          }
+
+          if (CONFIG.chunks.use_files_api) {
+            written = await twoPassFileRef(
+              filePath,
+              systemPrompt,
+              headingPrompt,
+              outDir,
+              log,
+            );
+          } else {
+            written = await twoPassInline(
+              filePath,
+              systemPrompt,
+              headingPrompt,
+              outDir,
+              log,
+            );
+          }
+        } else {
+          // Large file in a format that doesn't support two-pass
+          log.warn(
+            "File exceeds threshold but format not in two_pass_formats — skipping",
+            {
+              filename,
+              sizeKb: Math.round(sizeKb),
+              thresholdKb,
+              ext,
+            },
+          );
+          skipped.push(filename);
+          continue;
+        }
       } else {
-        log.info("PDF exceeds threshold — using two-pass", {
-          filename,
-          sizeKb: Math.round(sizeKb),
-          thresholdKb,
-        });
-        written = await twoPass(
-          pdfPath,
-          systemPrompt,
-          headingPrompt,
-          outDir,
-          log,
-        );
+        // Small file path — single-pass
+        if (ext === "pdf") {
+          const validation = await validatePdf(filePath, log);
+          if (!validation.valid) {
+            log.error("PDF validation failed — skipping", {
+              filename,
+              reason: validation.reason,
+            });
+            skipped.push(filename);
+            continue;
+          }
+          written = await singlePassPdf(filePath, systemPrompt, outDir, log);
+        } else if (ext === "docx") {
+          // §4.1: DOCX — extract text, re-check expanded size
+          const text = await extractDocxText(filePath);
+          const expandedKb = Buffer.byteLength(text, "utf-8") / 1024;
+          log.info("DOCX text extracted", {
+            filename,
+            expandedKb: Math.round(expandedKb),
+          });
+
+          if (expandedKb > thresholdKb) {
+            log.warn("DOCX expanded text exceeds threshold — skipping", {
+              filename,
+              expandedKb: Math.round(expandedKb),
+              thresholdKb,
+            });
+            skipped.push(filename);
+            continue;
+          }
+          written = await singlePassText(
+            filePath,
+            text,
+            systemPrompt,
+            outDir,
+            log,
+          );
+        } else {
+          // MD, TXT, and any other single_pass_formats
+          const text = await readFile(filePath, "utf-8");
+          written = await singlePassText(
+            filePath,
+            text,
+            systemPrompt,
+            outDir,
+            log,
+          );
+        }
       }
 
-      chunks_written += written;
-      processed.push(filename);
+      if (written === 0) {
+        log.warn("File produced zero chunks — not archiving", { filename });
+        skipped.push(filename);
+      } else {
+        chunks_written += written;
+        processed.push(filename);
+      }
     } catch (err) {
-      log.error("PDF processing failed — skipping", {
+      log.error("File processing failed — skipping", {
         filename,
         error: err instanceof Error ? err.message : String(err),
       });

@@ -7,7 +7,7 @@
  *   1. Normalise triggers — convert question-phrased triggers to noun phrases via LLM
  *   2. Embed — build one text string per chunk, send all to embedding model in one call
  *   3. Pairwise cosine similarity — mark both directions related if ≥ threshold
- *   4. BFS cluster report — connected components
+ *   4. BFS cluster report — connected components + isolated list + stats
  *
  * Failure is non-fatal — caller logs warning and continues.
  */
@@ -36,10 +36,27 @@ interface Cluster {
   chunks: ClusterChunk[];
 }
 
+interface IsolatedChunk {
+  chunk_id: string;
+  topic: string;
+}
+
+interface ClusterStats {
+  total_chunks: number;
+  clusters_found: number;
+  clustered: number;
+  clustered_pct: number;
+  isolated: number;
+  isolated_pct: number;
+  cluster_sizes: { min: number; max: number; avg: number } | null;
+}
+
 export interface RelatedChunksResult {
   model: string;
   threshold: number;
   clusters: Cluster[];
+  isolated: IsolatedChunk[];
+  stats: ClusterStats;
   /** Map of chunk_id → related chunk_ids (symmetric). Consumed by compile. */
   relatedMap: Map<string, string[]>;
 }
@@ -69,7 +86,7 @@ async function normaliseTriggers(
           system: normalisePrompt,
           prompt: `Normalise the triggers in this JSON. Return JSON only.\n\n${JSON.stringify(input)}`,
           model: CONFIG.related_chunks.normalize_model,
-          temperature: 0,
+          temperature: CONFIG.temperature.normalize,
           maxTokens: 8000,
         },
         log,
@@ -119,10 +136,11 @@ async function embedChunks(
     chunks: entries.length,
   });
 
-  // Build one text string per chunk
+  // §8: Build one text string per chunk — triggers joined with ", " (comma-space).
+  // Space-joining would be ambiguous since triggers themselves contain spaces.
   const texts = entries.map((e) => {
     const triggers = normalisedTriggers.get(e.chunk_id) ?? e.triggers;
-    return `${e.topic}. ${e.summary} ${triggers.join(" ")}`;
+    return `${e.topic}. ${e.summary} ${triggers.join(", ")}`;
   });
 
   const response = await fetch(
@@ -211,14 +229,15 @@ function computeSimilarity(
   return relatedMap;
 }
 
-// ─── Step 4: BFS cluster report ───────────────────────────────────────────────
+// ─── Step 4: BFS cluster report + isolated list + stats ───────────────────────
 
-function buildClusters(
+function buildClustersAndStats(
   entries: GuideEntry[],
   relatedMap: Map<string, string[]>,
-): Cluster[] {
+): { clusters: Cluster[]; isolated: IsolatedChunk[]; stats: ClusterStats } {
   const visited = new Set<string>();
   const clusters: Cluster[] = [];
+  const isolated: IsolatedChunk[] = [];
   const topicMap = new Map(entries.map((e) => [e.chunk_id, e.topic]));
 
   for (const entry of entries) {
@@ -240,8 +259,8 @@ function buildClusters(
       }
     }
 
-    // Only report clusters with more than 1 member (isolated nodes are not clusters)
     if (component.length > 1) {
+      // Cluster (connected component with 2+ members)
       clusters.push({
         size: component.length,
         chunks: component.map((id) => ({
@@ -250,10 +269,43 @@ function buildClusters(
           relations: (relatedMap.get(id) ?? []).length,
         })),
       });
+    } else {
+      // Isolated node — no related chunks
+      isolated.push({
+        chunk_id: entry.chunk_id,
+        topic: topicMap.get(entry.chunk_id) ?? "",
+      });
     }
   }
 
-  return clusters.sort((a, b) => b.size - a.size);
+  clusters.sort((a, b) => b.size - a.size);
+
+  // Compute stats
+  const total = entries.length;
+  const clustered = clusters.reduce((s, c) => s + c.size, 0);
+  const isolatedCount = isolated.length;
+  const sizes = clusters.map((c) => c.size);
+
+  const stats: ClusterStats = {
+    total_chunks: total,
+    clusters_found: clusters.length,
+    clustered,
+    clustered_pct: total > 0 ? Math.round((clustered / total) * 100) : 0,
+    isolated: isolatedCount,
+    isolated_pct: total > 0 ? Math.round((isolatedCount / total) * 100) : 0,
+    cluster_sizes:
+      sizes.length > 0
+        ? {
+            min: Math.min(...sizes),
+            max: Math.max(...sizes),
+            avg: parseFloat(
+              (sizes.reduce((s, v) => s + v, 0) / sizes.length).toFixed(1),
+            ),
+          }
+        : null,
+  };
+
+  return { clusters, isolated, stats };
 }
 
 // ─── Entry point ─────────────────────────────────────────────────────────────
@@ -273,6 +325,16 @@ export async function computeRelatedChunks(
       model: CONFIG.related_chunks.model,
       threshold: CONFIG.related_chunks.threshold,
       clusters: [],
+      isolated: [],
+      stats: {
+        total_chunks: 0,
+        clusters_found: 0,
+        clustered: 0,
+        clustered_pct: 0,
+        isolated: 0,
+        isolated_pct: 0,
+        cluster_sizes: null,
+      },
       relatedMap: new Map(),
     };
   }
@@ -291,15 +353,24 @@ export async function computeRelatedChunks(
     log,
   );
 
-  // Step 4: BFS clusters
-  const clusters = buildClusters(entries, relatedMap);
+  // Step 4: BFS clusters + isolated + stats
+  const { clusters, isolated, stats } = buildClustersAndStats(
+    entries,
+    relatedMap,
+  );
 
-  log.info("Related chunks complete", { clusters: clusters.length });
+  log.info("Related chunks complete", {
+    clusters: clusters.length,
+    isolated: isolated.length,
+    clustered: stats.clustered,
+  });
 
   return {
     model: CONFIG.related_chunks.model,
     threshold: CONFIG.related_chunks.threshold,
     clusters,
+    isolated,
+    stats,
     relatedMap,
   };
 }

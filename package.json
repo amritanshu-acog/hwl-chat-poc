@@ -14,6 +14,7 @@
     "gen:delete": "bun generation/pipeline/delete.ts",
     "gen:quality:procedure": "bun generation/pipeline/quality.ts procedure",
     "gen:quality:qna": "bun generation/pipeline/quality.ts qna",
+    "gen:guide-quality": "bun generation/pipeline/guide-quality.ts",
     "gen:compile": "bun generation/pipeline/compile.ts",
     "gen:reembed": "bun generation/pipeline/reembed.ts"
   },
@@ -34,6 +35,8 @@
     "ai": "^6.0.86",
     "dotenv": "^17.3.1",
     "hono": "^4.11.9",
+    "jose": "^6.2.0",
+    "mammoth": "^1.11.0",
     "node-fetch": "^3.3.2",
     "pdfjs-dist": "^5.5.207",
     "smol-toml": "^1.6.0",

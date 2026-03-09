@@ -1,24 +1,28 @@
 /**
  * generation/pipeline/delete.ts
  *
- * Delete stage — §9 of the design spec.
+ * Delete stage — §10 of the design spec.
  *
- * Usage: bun generation/pipeline/delete.ts "My Document.pdf"
+ * Two modes:
+ *   Source-level: bun generation/pipeline/delete.ts "My Document.pdf"
+ *   Chunk-level:  bun generation/pipeline/delete.ts --chunk <id> [<id> ...]
  *
- * 1. Load guide.yaml — find all chunks with source == <pdf_filename>
- * 2. If none found → return (no-op)
- * 3. Backup final/
- * 4. Delete chunk .md files from final/
- * 5. Rebuild guide.yaml
- * 6. Recompute related_chunks
- * 7. Write delete report to final/reports/<timestamp>.json
+ * Both modes:
+ *   1. Load guide.yaml — identify chunks to remove
+ *   2. Backup final/
+ *   3. Delete chunk .md files from final/
+ *   4. Rebuild guide.yaml
+ *   5. Recompute related_chunks
+ *   6. Write delete report to final/reports/<timestamp>.json
+ *   7. Run Guide Quality check
  */
 
-import { readFile, writeFile, rm, mkdir, cp, readdir } from "fs/promises";
+import { readFile, writeFile, rm, mkdir, copyFile, readdir } from "fs/promises";
 import { join } from "path";
 import { CONFIG } from "../core/config.js";
 import { makeLogger } from "../core/logger.js";
 import { computeRelatedChunks } from "./related-chunks.js";
+import { runGuideQuality } from "./guide-quality.js";
 import type { GuideEntry } from "./compile.js";
 
 // ─── Timestamp ────────────────────────────────────────────────────────────────
@@ -124,6 +128,7 @@ function serializeGuideYaml(entries: GuideEntry[]): string {
 }
 
 // ─── Backup ───────────────────────────────────────────────────────────────────
+// Mirrors compile.ts: copy only .md files and guide.yaml (no reports/).
 
 async function backupFinal(
   finalDir: string,
@@ -132,72 +137,30 @@ async function backupFinal(
 ): Promise<void> {
   const dest = join(backupDir, timestamp);
   await mkdir(dest, { recursive: true });
-  await cp(finalDir, dest, {
-    recursive: true,
-    filter: (src) => {
-      const relative = src.replace(finalDir, "");
-      return !relative.startsWith("/reports");
-    },
-  });
+
+  const filesToBackup = (await readdir(finalDir)).filter(
+    (f) => f.endsWith(".md") || f === "guide.yaml",
+  );
+  for (const f of filesToBackup) {
+    await copyFile(join(finalDir, f), join(dest, f));
+  }
 }
 
-// ─── Stage ────────────────────────────────────────────────────────────────────
+// ─── Shared tail: backup → delete → rebuild → report → guide quality ─────────
 
-export interface DeleteResult {
-  success: boolean;
-  source: string;
-  removed: GuideEntry[];
-  totalFinal: number;
-  reportPath: string;
-  error?: string;
-}
-
-export async function runDelete(sourceFilename: string): Promise<DeleteResult> {
-  const log = makeLogger("delete");
+async function deleteTail(
+  action: "delete_source" | "delete_chunks",
+  toDelete: GuideEntry[],
+  allEntries: GuideEntry[],
+  log: ReturnType<typeof makeLogger>,
+): Promise<DeleteResult> {
   const timestamp = makeTimestamp();
-
-  log.info("Delete stage started", { source: sourceFilename });
-
   const finalDir = CONFIG.directories.final;
   const backupDir = CONFIG.directories.final_backup;
   const reportsDir = CONFIG.directories.final_reports;
   const guidePath = CONFIG.directories.guide;
 
-  // ── Load guide.yaml ────────────────────────────────────────────────────────
-  let guideRaw: string;
-  try {
-    guideRaw = await readFile(guidePath, "utf-8");
-  } catch {
-    log.warn("guide.yaml not found — nothing to delete");
-    return {
-      success: true,
-      source: sourceFilename,
-      removed: [],
-      totalFinal: 0,
-      reportPath: "",
-    };
-  }
-
-  const allEntries = loadGuideEntries(guideRaw);
-  const toDelete = allEntries.filter((e) => e.source === sourceFilename);
-
-  if (toDelete.length === 0) {
-    log.info("No chunks found for source — no-op", { source: sourceFilename });
-    return {
-      success: true,
-      source: sourceFilename,
-      removed: [],
-      totalFinal: allEntries.length,
-      reportPath: "",
-    };
-  }
-
-  log.info("Chunks to delete", {
-    source: sourceFilename,
-    count: toDelete.length,
-  });
-
-  // ── Backup final/ ─────────────────────────────────────────────────────────
+  // ── Backup ────────────────────────────────────────────────────────────────
   try {
     await backupFinal(finalDir, backupDir, timestamp);
     log.info("Backup complete", { timestamp });
@@ -206,7 +169,7 @@ export async function runDelete(sourceFilename: string): Promise<DeleteResult> {
     log.error("Backup failed — aborting delete", { error });
     return {
       success: false,
-      source: sourceFilename,
+      action,
       removed: [],
       totalFinal: 0,
       reportPath: "",
@@ -215,7 +178,7 @@ export async function runDelete(sourceFilename: string): Promise<DeleteResult> {
   }
 
   try {
-    // ── Delete chunk files ────────────────────────────────────────────────
+    // ── Delete chunk files ──────────────────────────────────────────────────
     for (const entry of toDelete) {
       const chunkFile = join(finalDir, `${entry.chunk_id}.md`);
       try {
@@ -232,12 +195,13 @@ export async function runDelete(sourceFilename: string): Promise<DeleteResult> {
       }
     }
 
-    // ── Rebuild guide.yaml ────────────────────────────────────────────────
+    // ── Rebuild guide.yaml ──────────────────────────────────────────────────
+    const deletedIds = new Set(toDelete.map((e) => e.chunk_id));
     const remainingEntries = allEntries.filter(
-      (e) => e.source !== sourceFilename,
+      (e) => !deletedIds.has(e.chunk_id),
     );
 
-    // ── Recompute related_chunks ──────────────────────────────────────────
+    // ── Recompute related_chunks ───────────────────────────────────────────
     let relatedResult: unknown = { error: "not computed" };
     try {
       const rc = await computeRelatedChunks(remainingEntries, log);
@@ -256,13 +220,13 @@ export async function runDelete(sourceFilename: string): Promise<DeleteResult> {
     await writeFile(guidePath, serializeGuideYaml(remainingEntries), "utf-8");
     log.info("guide.yaml rebuilt", { remaining: remainingEntries.length });
 
-    // ── Write delete report ───────────────────────────────────────────────
+    // ── Write delete report ────────────────────────────────────────────────
     await mkdir(reportsDir, { recursive: true });
 
+    // §16: delete report has no top-level "source"; source is inside each removed entry.
     const report = {
       timestamp,
-      action: "delete",
-      source: sourceFilename,
+      action,
       removed: toDelete,
       total_final: remainingEntries.length,
       related_chunks: relatedResult,
@@ -272,15 +236,25 @@ export async function runDelete(sourceFilename: string): Promise<DeleteResult> {
     await writeFile(reportPath, JSON.stringify(report, null, 2), "utf-8");
 
     log.info("Delete stage complete", {
-      source: sourceFilename,
+      action,
       removed: toDelete.length,
       total_final: remainingEntries.length,
       reportPath,
     });
 
+    // ── Guide Quality check ────────────────────────────────────────────────
+    // §10: Runs automatically after every delete. Non-fatal.
+    try {
+      await runGuideQuality(log);
+    } catch (err) {
+      log.warn("Guide Quality check failed — non-fatal", {
+        error: String(err),
+      });
+    }
+
     return {
       success: true,
-      source: sourceFilename,
+      action,
       removed: toDelete,
       totalFinal: remainingEntries.length,
       reportPath,
@@ -290,7 +264,7 @@ export async function runDelete(sourceFilename: string): Promise<DeleteResult> {
     log.error("Delete stage failed", { error });
     return {
       success: false,
-      source: sourceFilename,
+      action,
       removed: [],
       totalFinal: 0,
       reportPath: "",
@@ -299,25 +273,157 @@ export async function runDelete(sourceFilename: string): Promise<DeleteResult> {
   }
 }
 
+// ─── Result type ──────────────────────────────────────────────────────────────
+
+export interface DeleteResult {
+  success: boolean;
+  action: "delete_source" | "delete_chunks";
+  removed: GuideEntry[];
+  totalFinal: number;
+  reportPath: string;
+  error?: string;
+}
+
+// ─── Source-level delete ──────────────────────────────────────────────────────
+
+export async function runDelete(sourceFilename: string): Promise<DeleteResult> {
+  const log = makeLogger("delete");
+  log.info("Delete stage started (source-level)", { source: sourceFilename });
+
+  const guidePath = CONFIG.directories.guide;
+
+  let guideRaw: string;
+  try {
+    guideRaw = await readFile(guidePath, "utf-8");
+  } catch {
+    log.warn("guide.yaml not found — nothing to delete");
+    return {
+      success: true,
+      action: "delete_source",
+      removed: [],
+      totalFinal: 0,
+      reportPath: "",
+    };
+  }
+
+  const allEntries = loadGuideEntries(guideRaw);
+  const toDelete = allEntries.filter((e) => e.source === sourceFilename);
+
+  if (toDelete.length === 0) {
+    log.info("No chunks found for source — no-op", { source: sourceFilename });
+    return {
+      success: true,
+      action: "delete_source",
+      removed: [],
+      totalFinal: allEntries.length,
+      reportPath: "",
+    };
+  }
+
+  log.info("Chunks to delete", {
+    source: sourceFilename,
+    count: toDelete.length,
+  });
+
+  return deleteTail("delete_source", toDelete, allEntries, log);
+}
+
+// ─── Chunk-level delete ───────────────────────────────────────────────────────
+
+export async function runDeleteChunks(
+  chunkIds: string[],
+): Promise<DeleteResult> {
+  const log = makeLogger("delete");
+  log.info("Delete stage started (chunk-level)", { chunk_ids: chunkIds });
+
+  const guidePath = CONFIG.directories.guide;
+
+  let guideRaw: string;
+  try {
+    guideRaw = await readFile(guidePath, "utf-8");
+  } catch {
+    log.warn("guide.yaml not found — nothing to delete");
+    return {
+      success: true,
+      action: "delete_chunks",
+      removed: [],
+      totalFinal: 0,
+      reportPath: "",
+    };
+  }
+
+  const allEntries = loadGuideEntries(guideRaw);
+  const idSet = new Set(chunkIds);
+
+  // Warn about IDs not found; still proceed with the ones that are found.
+  for (const id of chunkIds) {
+    if (!allEntries.some((e) => e.chunk_id === id)) {
+      log.warn("chunk_id not found in guide.yaml — skipping", { chunk_id: id });
+    }
+  }
+
+  const toDelete = allEntries.filter((e) => idSet.has(e.chunk_id));
+
+  if (toDelete.length === 0) {
+    log.info("None of the specified chunk IDs found — no-op");
+    return {
+      success: true,
+      action: "delete_chunks",
+      removed: [],
+      totalFinal: allEntries.length,
+      reportPath: "",
+    };
+  }
+
+  log.info("Chunks to delete", { count: toDelete.length });
+
+  return deleteTail("delete_chunks", toDelete, allEntries, log);
+}
+
 // ─── CLI entry point ──────────────────────────────────────────────────────────
 
 if (import.meta.main) {
-  const source = process.argv[2];
-  if (!source) {
-    console.error("Usage: bun generation/pipeline/delete.ts <pdf_filename>");
-    console.error(
-      'Example: bun generation/pipeline/delete.ts "My Document.pdf"',
-    );
-    process.exit(1);
-  }
+  const args = process.argv.slice(2);
 
-  const result = await runDelete(source);
-  if (result.success) {
-    console.log(`✅ Deleted ${result.removed.length} chunk(s) for "${source}"`);
-    console.log(`   Total remaining: ${result.totalFinal}`);
-    if (result.reportPath) console.log(`   Report: ${result.reportPath}`);
+  if (args[0] === "--chunk") {
+    // Chunk-level delete: --chunk <id> [<id> ...]
+    const ids = args.slice(1);
+    if (ids.length === 0) {
+      console.error(
+        "Usage: bun generation/pipeline/delete.ts --chunk <chunk_id> [<chunk_id> ...]",
+      );
+      process.exit(1);
+    }
+    const result = await runDeleteChunks(ids);
+    if (result.success) {
+      console.log(`✅ Deleted ${result.removed.length} chunk(s)`);
+      console.log(`   Total remaining: ${result.totalFinal}`);
+      if (result.reportPath) console.log(`   Report: ${result.reportPath}`);
+    } else {
+      console.error(`❌ Delete failed: ${result.error}`);
+      process.exit(1);
+    }
   } else {
-    console.error(`❌ Delete failed: ${result.error}`);
-    process.exit(1);
+    // Source-level delete: <pdf_filename>
+    const source = args[0];
+    if (!source) {
+      console.error("Usage: bun generation/pipeline/delete.ts <pdf_filename>");
+      console.error(
+        "       bun generation/pipeline/delete.ts --chunk <chunk_id> [<chunk_id> ...]",
+      );
+      process.exit(1);
+    }
+
+    const result = await runDelete(source);
+    if (result.success) {
+      console.log(
+        `✅ Deleted ${result.removed.length} chunk(s) for "${source}"`,
+      );
+      console.log(`   Total remaining: ${result.totalFinal}`);
+      if (result.reportPath) console.log(`   Report: ${result.reportPath}`);
+    } else {
+      console.error(`❌ Delete failed: ${result.error}`);
+      process.exit(1);
+    }
   }
 }

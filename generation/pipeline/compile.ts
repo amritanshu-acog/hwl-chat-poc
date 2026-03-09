@@ -27,6 +27,7 @@ import { join, basename } from "path";
 import { CONFIG } from "../core/config.js";
 import { makeLogger } from "../core/logger.js";
 import { computeRelatedChunks } from "./related-chunks.js";
+import { runGuideQuality } from "./guide-quality.js";
 import type { StageLogger } from "../core/logger.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -500,6 +501,16 @@ export async function runCompile(): Promise<CompileResult> {
       total_final: allEntries.length,
       reportPath,
     });
+
+    // ── Guide Quality check ───────────────────────────────────────────────
+    // §7 step 10: runs automatically at the end of every compile. Non-fatal.
+    try {
+      await runGuideQuality(log);
+    } catch (err) {
+      log.warn("Guide Quality check failed — non-fatal", {
+        error: String(err),
+      });
+    }
 
     return { success: true, reportPath, totalFinal: allEntries.length };
   } catch (err) {

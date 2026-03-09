@@ -1,3 +1,19 @@
+/**
+ * @deprecated DEAD CODE — GAP FIX #7
+ *
+ * This file is NOT used by any pipeline code. The active prompt cache lives in
+ * resources/resources.ts (getPrompt()). This file's fs.watch() fires correctly
+ * but evicts entries from a local Map that nobody reads — prompt hot-reload
+ * does NOT work via this file.
+ *
+ * Options:
+ *   A) Delete this file. Document that prompt changes need a process restart.
+ *   B) Wire hot-reload: replace the promptCache + getPrompt in resources.ts
+ *      with this loadPrompt() export, which already has the watch logic.
+ *
+ * Until then this file is kept for reference only.
+ */
+
 import { readFile } from "fs/promises";
 import { join } from "path";
 import { watch } from "fs";

@@ -11,8 +11,8 @@ output_quality_pass   = "generation/output/quality/pass"
 output_quality_fail   = "generation/output/quality/fail"
 output_quality_reports = "generation/output/quality/reports"
 final                 = "generation/output/final"
-final_backup          = "generation/output/backup"
-final_reports         = "generation/output/reports"
+final_backup          = "generation/output/final/backup"
+final_reports         = "generation/output/final/reports"
 log                   = "generation/output/log"
 guide                 = "generation/output/final/guide.yaml"
 
@@ -36,15 +36,29 @@ quality = "gpt-4o-mini"
 # ── Temperature ───────────────────────────────────────────────────────────────
 
 [temperature]
-chunk   = 0.2
-quality = 0.0
+chunk     = 0.2
+quality   = 0.0
+normalize = 0.0
 
 # ── Chunk Stage ───────────────────────────────────────────────────────────────
 
 [chunks]
-# PDFs at or below this size (KB) use single-pass extraction.
-# PDFs above this size use two-pass (Files API upload + TOC + section loop).
+# Files at or below this size (KB) use single-pass extraction.
+# Files above this size use two-pass (PDFs only, requires TOC extraction).
 single_pass_threshold_kb = 2048
+
+# Formats eligible for single-pass processing.
+single_pass_formats = ["pdf", "docx", "md", "txt"]
+
+# Formats eligible for two-pass processing (requires TOC extraction).
+two_pass_formats = ["pdf"]
+
+# If true, upload PDF to the provider Files API once and reference by file_id.
+# If false, base64-encode and send inline on every call (for LLM gateways).
+use_files_api = false
+
+# Headings to exclude from TOC extraction (exact match). Applied by all 3 tiers.
+skip_headings = []
 
 # Write extracted TOC XML to output/chunk/heading/ for debugging.
 save_headings = false

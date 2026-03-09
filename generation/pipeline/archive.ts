@@ -3,15 +3,16 @@
  *
  * Archive stage — §2 Document Lifecycle.
  *
- * On full pipeline success, moves input PDFs to input/processed/<doc_type>/.
- * Runs per doc_type, only when all prior stages succeeded for that doc_type.
+ * On full pipeline success, moves ONLY the specific input files that were
+ * successfully chunked (≥ 1 chunk) to input/processed/<doc_type>/.
+ * Files that failed or produced zero chunks remain in input/.
  *
  * Uses rename() (atomic on same filesystem) with a copy+delete fallback
  * for cross-device moves (e.g. input and processed on different mounts).
  */
 
-import { rename, copyFile, unlink, readdir } from "fs/promises";
-import { join, basename } from "path";
+import { rename, copyFile, unlink, mkdir } from "fs/promises";
+import { join } from "path";
 import { CONFIG } from "../core/config.js";
 import type { StageLogger } from "../core/logger.js";
 
@@ -46,14 +47,19 @@ async function moveFile(src: string, dest: string): Promise<void> {
 // ─── Stage ────────────────────────────────────────────────────────────────────
 
 /**
- * Archive all PDFs in an input directory to the corresponding processed directory.
+ * Archive a specific list of successfully-chunked input files.
  *
- * @param doc_type  "procedure" or "qna"
- * @param log       Stage logger
- * @returns         ArchiveResult with lists of archived and failed filenames
+ * §2: Only files that produced ≥ 1 chunk are eligible for archiving.
+ * Files that failed or were skipped at chunk stage remain in input/.
+ *
+ * @param doc_type         "procedure" or "qna"
+ * @param filesToArchive   Exact filenames (not paths) that were successfully chunked
+ * @param log              Stage logger
+ * @returns                ArchiveResult with lists of archived and failed filenames
  */
 export async function runArchive(
   doc_type: "procedure" | "qna",
+  filesToArchive: string[],
   log: StageLogger,
 ): Promise<ArchiveResult> {
   const inputDir =
@@ -63,44 +69,34 @@ export async function runArchive(
 
   const processedDir = join(CONFIG.directories.processed, doc_type);
 
-  log.info("Archive stage started", { doc_type, inputDir, processedDir });
+  log.info("Archive stage started", {
+    doc_type,
+    inputDir,
+    processedDir,
+    files: filesToArchive.length,
+  });
 
-  // ── List PDFs in input dir ────────────────────────────────────────────────
-  let allFiles: string[];
-  try {
-    allFiles = await readdir(inputDir);
-  } catch (err) {
-    log.error("Cannot read input directory — skipping archive", {
-      doc_type,
-      inputDir,
-      error: err instanceof Error ? err.message : String(err),
-    });
+  if (filesToArchive.length === 0) {
+    log.info("No files to archive", { doc_type });
     return { doc_type, archived: [], failed: [] };
   }
 
-  const pdfs = allFiles.filter((f) => f.toLowerCase().endsWith(".pdf"));
-
-  if (pdfs.length === 0) {
-    log.info("No PDFs to archive", { doc_type });
-    return { doc_type, archived: [], failed: [] };
-  }
-
-  log.info("PDFs found for archiving", { doc_type, count: pdfs.length });
+  // Ensure the processed directory exists
+  await mkdir(processedDir, { recursive: true });
 
   const archived: string[] = [];
   const failed: string[] = [];
 
-  // ── Move each PDF ─────────────────────────────────────────────────────────
-  for (const filename of pdfs) {
+  for (const filename of filesToArchive) {
     const src = join(inputDir, filename);
     const dest = join(processedDir, filename);
 
     try {
       await moveFile(src, dest);
-      log.info("Archived PDF", { filename, dest });
+      log.info("Archived file", { filename, dest });
       archived.push(filename);
     } catch (err) {
-      log.error("Failed to archive PDF — leaving in input dir", {
+      log.error("Failed to archive file — leaving in input dir", {
         filename,
         error: err instanceof Error ? err.message : String(err),
       });

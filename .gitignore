@@ -54,6 +54,7 @@ generation/output/chunk/heading/*
 
 # Backups
 generation/output/backup/*
+generation/output/final/backup/*
 !generation/output/backup/.gitkeep
 
 # Quality pass/fail directories

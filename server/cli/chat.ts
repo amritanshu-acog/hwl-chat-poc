@@ -1,219 +1,143 @@
 import * as readline from "readline/promises";
 import { stdin as input, stdout as output } from "process";
-import { readFile } from "fs/promises";
-import { join } from "path";
-import { answerTroubleshootingQuestion } from "../llm/client.js";
-import type { ChatResponse } from "../core/schemas.js";
-import { logger } from "../core/logger.js";
+import { parseArgs } from "util";
+import { runPipeline } from "../pipeline/pipeline.js";
+import { Session } from "../session/session.js";
+import { preload } from "../resources/resources.js";
 import { CONFIG } from "../core/config.js";
+import { logger } from "../core/logger.js";
 
-const GUIDE_PATH = CONFIG.paths.guide;
-// ─── CLI renderer ─────────────────────────────────────────────────────────────
-// Renders parsed ChatResponse components as readable terminal output.
+// ─── Arg parsing ──────────────────────────────────────────────────────────────
 
-function renderResponse(parsed: ChatResponse | ChatResponse[]): void {
-  const items = Array.isArray(parsed) ? parsed : [parsed];
+const { values: args } = parseArgs({
+  options: {
+    "user-id": { type: "string", default: "cli-user" },
+    "session-id": { type: "string" },
+    list: { type: "boolean", default: false },
+    show: { type: "string" },
+  },
+  strict: false,
+});
 
-  for (const item of items) {
-    console.log("");
+const userId = (args["user-id"] as string) ?? "cli-user";
+const sessionId = args["session-id"] as string | undefined;
+const listMode = (args["list"] as boolean) ?? false;
+const showId = args["show"] as string | undefined;
 
-    switch (item.type) {
-      case "steps": {
-        const { title, intro, steps, followUp } = item.data;
-        console.log(`📋 ${title}`);
-        if (intro) console.log(`   ${intro}`);
-        console.log("");
-        steps.forEach((step, i) => {
-          console.log(`   ${i + 1}. ${step.title}`);
-          console.log(`      ${step.body}`);
-        });
-        if (followUp) console.log(`\n❓ ${followUp}`);
-        break;
-      }
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
-      case "choices": {
-        const { question, options } = item.data;
-        console.log(`❓ ${question}`);
-        options.forEach((opt, i) => {
-          const desc = opt.description ? ` — ${opt.description}` : "";
-          console.log(`   ${i + 1}. ${opt.label}${desc}`);
-        });
-        break;
-      }
+function printCitations(citations: { chunk_id: string; source: string }[]) {
+  if (citations.length === 0) return;
+  const sources = [...new Set(citations.map((c) => c.source))];
+  console.log(`\n📎 Sources: ${sources.join(", ")}`);
+}
 
-      case "alert": {
-        const { severity, title, body } = item.data;
-        const icon =
-          severity === "danger" ? "🚨" : severity === "warning" ? "⚠️ " : "ℹ️ ";
-        console.log(`${icon} ${title}`);
-        console.log(`   ${body}`);
-        break;
-      }
-
-      case "checklist": {
-        const { title, items: checkItems } = item.data;
-        console.log(`✅ ${title}`);
-        checkItems.forEach((ci) => console.log(`   ☐ ${ci}`));
-        break;
-      }
-
-      case "escalation": {
-        const { reason, summary, ctaLabel } = item.data;
-        console.log(`🔺 Escalation needed`);
-        console.log(`   Reason: ${reason}`);
-        console.log(`   Summary: ${summary}`);
-        console.log(`   → ${ctaLabel}`);
-        break;
-      }
-
-      case "summary": {
-        const { title, body } = item.data;
-        console.log(`✅ ${title}`);
-        console.log(`   ${body}`);
-        break;
-      }
-
-      case "text":
-      default: {
-        console.log(`   ${"data" in item ? item.data.body : String(item)}`);
-        break;
-      }
-    }
-  }
-
+function printResponse(result: Awaited<ReturnType<typeof runPipeline>>) {
+  console.log("\nAssistant:\n");
+  console.log(result.response);
+  printCitations(result.citations);
   console.log("");
 }
 
-// ─── Main ─────────────────────────────────────────────────────────────────────
+// ─── --list: show all sessions for the user ───────────────────────────────────
 
-const DEBUG_MODE = process.argv.includes("--debug");
-
-async function startChat() {
-  logger.info("Starting HWL Troubleshooting Assistant CLI UI");
-  console.log("\n🔧 HWL Troubleshooting Assistant");
-  if (DEBUG_MODE) {
-    logger.debug(
-      "Running in DEBUG MODE — retrieved chunks will be shown before each answer",
-    );
+async function runList() {
+  const sessions = await Session.list(userId);
+  if (sessions.length === 0) {
+    console.log(`No sessions found for user: ${userId}`);
+    return;
   }
-  console.log("");
+  console.log(`\nSessions for user: ${userId}\n`);
+  for (const s of sessions) {
+    console.log(`  [${s.session_id.slice(0, 8)}…]  ${s.title}`);
+    console.log(`    Turns: ${s.turn_count}  |  Updated: ${s.updated_at}`);
+    console.log(`    File:  ${s.filename}\n`);
+  }
+}
 
-  // Confirm guide.yaml exists and show available processes
-  let processCount = 0;
-  try {
-    const guide = await readFile(GUIDE_PATH, "utf-8");
-    const blocks = guide.split(/^\s*- chunk_id:/m).filter((b) => b.trim());
-    processCount = blocks.filter((b) => b.match(/status:\s*active/)).length;
+// ─── --show: print conversation history for a session ─────────────────────────
 
-    console.log("Available processes:");
-    for (const block of blocks) {
-      const processId = block.match(/^\s*([^\n]+)/)?.[1]?.trim() ?? "";
-      const processName = block.match(/\n\s+topic:\s*(.+)/)?.[1]?.trim() ?? "";
-      const description =
-        block.match(/description:\s*"?([^"\n]+)"?/)?.[1]?.trim() ?? "";
-      console.log(`  • [${processId}] ${processName}: ${description}`);
+async function runShow(sid: string) {
+  const session = await Session.load(userId, sid);
+  console.log(`\nSession: ${session.session_id}`);
+  if (session.title) console.log(`Title:   ${session.title}`);
+  console.log(`Created: ${session.created_at}\n`);
+
+  for (const turn of session.turns) {
+    const role = turn.role === "user" ? "You" : "Assistant";
+    console.log(`${role} [window ${turn.window}]:`);
+    console.log(`  ${turn.content.replace(/\n/g, "\n  ")}`);
+    if ("citations" in turn && turn.citations?.length) {
+      const sources = [...new Set(turn.citations.map((c: any) => c.source))];
+      console.log(`  📎 Sources: ${sources.join(", ")}`);
     }
-  } catch {
-    logger.error(
-      "guide.yaml not found. Run extraction first: bun run extract <file>",
-    );
-    process.exit(1);
+    console.log("");
   }
+}
 
-  if (processCount === 0) {
-    logger.error(
-      "No processes found in guide.yaml. Run extraction first: bun run extract <file>",
-    );
-    process.exit(1);
-  }
+// ─── Interactive chat loop ────────────────────────────────────────────────────
 
-  console.log('\nType your question or "exit" to quit\n');
-
-  const conversationHistory: Array<{
-    role: "user" | "assistant";
-    content: string;
-  }> = [];
+async function runChat() {
+  console.log("\n🤖 AI Help Bot — Retrieval Pipeline");
+  console.log(`   User:    ${userId}`);
+  if (sessionId) console.log(`   Session: ${sessionId}`);
+  console.log('   Type your question or "exit" to quit\n');
 
   const rl = readline.createInterface({ input, output });
+  let currentSessionId: string | undefined = sessionId;
 
   while (true) {
+    let question: string;
     try {
-      const question = await rl.question("You: ");
+      question = await rl.question("You: ");
+    } catch {
+      break; // stdin closed (e.g. piped input ended)
+    }
 
-      if (!question.trim()) continue;
+    if (!question.trim()) continue;
 
-      if (
-        question.toLowerCase() === "exit" ||
-        question.toLowerCase() === "quit"
-      ) {
-        logger.info("User requested exit");
-        console.log("\nGoodbye!");
+    if (["exit", "quit"].includes(question.trim().toLowerCase())) {
+      console.log("\nGoodbye!");
+      rl.close();
+      process.exit(0);
+    }
+
+    try {
+      const result = await runPipeline(userId, question, currentSessionId);
+
+      // Pin session after first turn so subsequent messages resume it.
+      currentSessionId = result.session_id;
+
+      if (result.response_type === "quota_exceeded") {
+        console.log(`\n⚠️  ${result.response}\n`);
         rl.close();
         process.exit(0);
       }
 
-      console.log("\nAssistant:");
-
-      try {
-        const { raw, parsed, contextChunks } =
-          await answerTroubleshootingQuestion(question, conversationHistory);
-
-        // ── Debug view: show evidence chunks before the answer ──────────────────
-        if (DEBUG_MODE) {
-          console.log("\n" + "═".repeat(62));
-          console.log(
-            "🔍 [DEBUG] EVIDENCE: The AI is reading the following chunks",
-          );
-          console.log("═".repeat(62));
-          if (contextChunks.length === 0) {
-            console.log("⚠️  No relevant chunks found for this question.");
-          } else {
-            contextChunks.forEach((chunk, idx) => {
-              console.log(`\n📋 Chunk ${idx + 1} of ${contextChunks.length}`);
-              console.log(`   ID:      ${chunk.chunk_id}`);
-              console.log(`   Topic:   ${chunk.topic}`);
-              console.log(`   Summary: ${chunk.summary}`);
-              console.log("   " + "─".repeat(56));
-              // Show content preview (first 800 chars to keep it readable)
-              const preview = chunk.content.trim().slice(0, 800);
-              const truncated =
-                chunk.content.length > 800 ? "... [truncated]" : "";
-              console.log("   " + preview.replace(/\n/g, "\n   ") + truncated);
-            });
-          }
-          console.log("\n" + "═".repeat(62) + "\n");
-        }
-
-        renderResponse(parsed);
-
-        // Store raw string in history so LLM has context next turn
-        conversationHistory.push(
-          { role: "user", content: question },
-          { role: "assistant", content: raw },
-        );
-
-        if (conversationHistory.length > 10) {
-          conversationHistory.splice(0, 2);
-        }
-      } catch (apiError) {
-        logger.error("API Error during chat", {
-          error:
-            apiError instanceof Error ? apiError.message : String(apiError),
-        });
-        console.log("\nAPI Error. Please check your API key in .env file\n");
-      }
-    } catch (error) {
-      logger.error("Unexpected error during chat", {
-        error: error instanceof Error ? error.message : String(error),
+      printResponse(result);
+    } catch (err) {
+      logger.error("Pipeline error", {
+        err: err instanceof Error ? err.message : String(err),
       });
-      console.log("");
+      console.log("\n❌ Something went wrong. Please try again.\n");
     }
   }
+
+  rl.close();
 }
 
-startChat().catch((err) => {
-  logger.error("startChat failed", {
-    error: err instanceof Error ? err.message : String(err),
-  });
-  console.error("Chat failure:", err);
-});
+// ─── Entry point ──────────────────────────────────────────────────────────────
+
+try {
+  await preload();
+} catch {
+  console.warn("⚠️  Some resources failed to preload — continuing anyway.");
+}
+
+if (listMode) {
+  await runList();
+} else if (showId) {
+  await runShow(showId);
+} else {
+  await runChat();
+}
