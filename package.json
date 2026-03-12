@@ -8,6 +8,7 @@
     "server": "bun run server/api/server.ts",
     "dev": "bun --watch server/cli/chat.ts",
     "gen:run": "bun generation/pipeline/run.ts",
+    "gen:chunk": "bun generation/pipeline/chunk-run.ts",
     "gen:run:procedure": "bun generation/pipeline/run.ts --doc-type=procedure",
     "gen:run:qna": "bun generation/pipeline/run.ts --doc-type=qna",
     "gen:generate-rules": "bun generation/pipeline/generate-rules.ts",

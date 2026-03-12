@@ -732,7 +732,8 @@ async function twoPassFileRef(
     log.info("Two pass (file-reference): TOC extraction complete", {
       source,
       tier: toc.tier,
-      headings: headings.length,
+      headings,
+      headingsCount: headings.length,
     });
 
     // Fallback: no headings → full document call using file_id
