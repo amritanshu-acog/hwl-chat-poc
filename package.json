@@ -13,6 +13,7 @@
     "gen:run:qna": "bun generation/pipeline/run.ts --doc-type=qna",
     "gen:generate-rules": "bun generation/pipeline/generate-rules.ts",
     "gen:delete": "bun generation/pipeline/delete.ts",
+    "gen:delete:chunk": "bun generation/pipeline/delete.ts --chunk",
     "gen:quality:procedure": "bun generation/pipeline/quality.ts procedure",
     "gen:quality:qna": "bun generation/pipeline/quality.ts qna",
     "gen:guide-quality": "bun generation/pipeline/guide-quality.ts",
